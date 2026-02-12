@@ -64,6 +64,7 @@
     "cors": "^2.8.5",
     "dedent": "^1.5.3",
     "dotenv": "^16.0.3",
+    "emailvalid": "^1.0.4",
     "eventsource": "^3.0.2",
     "express": "^4.21.2",
     "express-mongo-sanitize": "^2.2.0",

@@ -3,6 +3,8 @@ const jwt = require('jsonwebtoken');
 const { webcrypto } = require('node:crypto');
 const { logger } = require('@librechat/data-schemas');
 const { isEnabled, checkEmailConfig, isEmailDomainAllowed } = require('@librechat/api');
+const EmailValidation = require('emailvalid');
+const ev = new EmailValidation({ allowFreemail: true });
 const { ErrorTypes, SystemRoles, errorsToString } = require('librechat-data-provider');
 const {
   findUser,
@@ -186,6 +188,12 @@ const registerUser = async (user, additionalData = {}) => {
         'The email address provided cannot be used. Please use a different email address.';
       logger.error(`[registerUser] [Registration not allowed] [Email: ${user.email}]`);
       return { status: 403, message: errorMessage };
+    }
+
+    const emailCheck = ev.check(email);
+    if (!emailCheck.valid) {
+      logger.error(`[registerUser] [Invalid email] [Email: ${email}] [Errors: ${emailCheck.errors.join(', ')}]`);
+      return { status: 403, message: 'The email address provided is not valid. Please use a different email address.' };
     }
 
     const existingUser = await findUser({ email }, 'email _id');
