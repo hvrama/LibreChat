@@ -468,6 +468,13 @@ export type TVerifyEmail = {
 
 export type TResendVerificationEmail = Omit<TVerifyEmail, 'token'>;
 
+export type ApproveUserResponse = { message: string };
+
+export type TApproveUser = {
+  email: string;
+  token: string;
+};
+
 export type TRefreshTokenResponse = {
   token: string;
   user: TUser;

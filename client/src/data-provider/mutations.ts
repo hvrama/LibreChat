@@ -1060,6 +1060,18 @@ export const useResendVerificationEmail = (
   });
 };
 
+/**
+ * Hook for approving a user registration
+ */
+export const useApproveUserMutation = (
+  options?: t.ApproveUserOptions,
+): UseMutationResult<t.ApproveUserResponse, unknown, t.TApproveUser, unknown> => {
+  return useMutation({
+    mutationFn: (variables: t.TApproveUser) => dataService.approveUser(variables),
+    ...(options || {}),
+  });
+};
+
 export const useAcceptTermsMutation = (
   options?: t.AcceptTermsMutationOptions,
 ): UseMutationResult<t.TAcceptTermsResponse, unknown, void, unknown> => {

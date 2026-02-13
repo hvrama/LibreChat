@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import {
   Login,
   VerifyEmail,
+  ApproveUser,
   Registration,
   ResetPassword,
   ApiErrorWatcher,
@@ -74,6 +75,11 @@ export const router = createBrowserRouter(
     {
       path: 'verify',
       element: <VerifyEmail />,
+      errorElement: <RouteErrorBoundary />,
+    },
+    {
+      path: 'approve',
+      element: <ApproveUser />,
       errorElement: <RouteErrorBoundary />,
     },
     {

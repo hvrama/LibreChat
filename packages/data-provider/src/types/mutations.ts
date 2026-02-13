@@ -258,6 +258,7 @@ export type ResendVerifcationOptions = MutationOptions<
   types.VerifyEmailResponse,
   types.TResendVerificationEmail
 >;
+export type ApproveUserOptions = MutationOptions<types.ApproveUserResponse, types.TApproveUser>;
 export type RegistrationOptions = MutationOptions<
   types.TRegisterUserResponse,
   types.TRegisterUser,

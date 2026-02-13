@@ -151,6 +151,8 @@ export const verifyEmail = () => `${BASE_URL}/api/user/verify`;
 
 export const resendVerificationEmail = () => `${BASE_URL}/api/user/verify/resend`;
 
+export const approveUser = () => `${BASE_URL}/api/user/approve`;
+
 export const plugins = () => `${BASE_URL}/api/plugins`;
 
 export const mcpReinitialize = (serverName: string) =>

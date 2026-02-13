@@ -14,6 +14,8 @@ const getLoginError = (errorText: string): TranslationKeys => {
       return 'com_auth_error_login_ban';
     case errorText.includes('500'):
       return 'com_auth_error_login_server';
+    case errorText.includes('pending_approval'):
+      return 'com_auth_error_login_pending_approval';
     case errorText.includes('422'):
       return 'com_auth_error_login_unverified';
     default:

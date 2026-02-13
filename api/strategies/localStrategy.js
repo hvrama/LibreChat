@@ -65,6 +65,12 @@ async function passportLogin(req, email, password, done) {
       return done(null, user, { message: 'Email not verified.' });
     }
 
+    if (process.env.APPROVER_EMAIL && !user.adminApproved) {
+      logError('Passport Local Strategy - Account not approved', { email });
+      logger.error(`[Login] [Login failed] [Username: ${email}] [Request-IP: ${req.ip}]`);
+      return done(null, user, { message: 'pending_approval' });
+    }
+
     logger.info(`[Login] [Login successful] [Username: ${email}] [Request-IP: ${req.ip}]`);
     return done(null, user);
   } catch (err) {

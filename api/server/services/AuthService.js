@@ -102,6 +102,7 @@ const sendVerificationEmail = async (user) => {
     userId: user._id,
     email: user.email,
     token: hash,
+    identifier: 'verification',
     createdAt: Date.now(),
     expiresIn: 900,
   });
@@ -129,7 +130,7 @@ const verifyEmail = async (req) => {
     return { message: 'Email already verified', status: 'success' };
   }
 
-  let emailVerificationData = await findToken({ email: decodedEmail }, { sort: { createdAt: -1 } });
+  let emailVerificationData = await findToken({ email: decodedEmail, identifier: 'verification' }, { sort: { createdAt: -1 } });
 
   if (!emailVerificationData) {
     logger.warn(`[verifyEmail] [No email verification data found] [Email: ${decodedEmail}]`);
@@ -155,6 +156,116 @@ const verifyEmail = async (req) => {
   await deleteTokens({ token: emailVerificationData.token });
   logger.info(`[verifyEmail] Email verification successful [Email: ${decodedEmail}]`);
   return { message: 'Email verification was successful', status: 'success' };
+};
+
+/**
+ * Send Approval Request Email to the configured approver
+ * @param {Partial<IUser>} user
+ * @returns {Promise<void>}
+ */
+const sendApprovalEmail = async (user) => {
+  const approverEmail = process.env.APPROVER_EMAIL;
+  if (!approverEmail) {
+    logger.warn('[sendApprovalEmail] APPROVER_EMAIL not configured, skipping approval email.');
+    return;
+  }
+
+  const [approvalToken, hash] = createTokenHash();
+
+  const approvalLink = `${
+    domains.client
+  }/approve?token=${approvalToken}&email=${encodeURIComponent(user.email)}`;
+
+  await sendEmail({
+    email: approverEmail,
+    subject: `New user registration approval request - ${user.email}`,
+    payload: {
+      appName: process.env.APP_TITLE || 'LibreChat',
+      name: 'Approver',
+      userName: user.name || user.username || user.email,
+      userEmail: user.email,
+      approvalLink: approvalLink,
+      year: new Date().getFullYear(),
+    },
+    template: 'approvalRequest.handlebars',
+  });
+
+  await createToken({
+    userId: user._id,
+    email: user.email,
+    token: hash,
+    identifier: 'approval',
+    createdAt: Date.now(),
+    expiresIn: 604800, // 7 days
+  });
+
+  logger.info(`[sendApprovalEmail] Approval link issued for [Email: ${user.email}]`);
+};
+
+/**
+ * Approve a user registration
+ * @param {ServerRequest} req
+ */
+const approveUser = async (req) => {
+  const { email, token } = req.body;
+  const decodedEmail = decodeURIComponent(email);
+
+  const user = await findUser({ email: decodedEmail }, 'email _id name username adminApproved emailVerified');
+
+  if (!user) {
+    logger.warn(`[approveUser] [User not found] [Email: ${decodedEmail}]`);
+    return new Error('User not found');
+  }
+
+  if (user.adminApproved) {
+    logger.info(`[approveUser] User already approved [Email: ${decodedEmail}]`);
+    return { message: 'User has already been approved', status: 'success' };
+  }
+
+  let approvalTokenData = await findToken(
+    { email: decodedEmail, identifier: 'approval' },
+    { sort: { createdAt: -1 } },
+  );
+
+  if (!approvalTokenData) {
+    logger.warn(`[approveUser] [No approval token found] [Email: ${decodedEmail}]`);
+    return new Error('Invalid or expired approval token');
+  }
+
+  const isValid = bcrypt.compareSync(token, approvalTokenData.token);
+
+  if (!isValid) {
+    logger.warn(`[approveUser] [Invalid or expired approval token] [Email: ${decodedEmail}]`);
+    return new Error('Invalid or expired approval token');
+  }
+
+  const updatedUser = await updateUser(approvalTokenData.userId, { adminApproved: true });
+
+  if (!updatedUser) {
+    logger.warn(`[approveUser] [User update failed] [Email: ${decodedEmail}]`);
+    return new Error('Failed to update user approval status');
+  }
+
+  await deleteTokens({ token: approvalTokenData.token });
+  logger.info(`[approveUser] User approved successfully [Email: ${decodedEmail}]`);
+
+  if (user.emailVerified && checkEmailConfig()) {
+    await sendEmail({
+      email: user.email,
+      subject: 'Your account has been approved',
+      payload: {
+        appName: process.env.APP_TITLE || 'LibreChat',
+        name: user.name || user.username || user.email,
+        loginLink: `${domains.client}/login`,
+        year: new Date().getFullYear(),
+      },
+      template: 'approvalGranted.handlebars',
+      throwError: false,
+    });
+    logger.info(`[approveUser] Approval notification email sent [Email: ${decodedEmail}]`);
+  }
+
+  return { message: 'User has been approved successfully', status: 'success' };
 };
 
 /**
@@ -230,6 +341,18 @@ const registerUser = async (user, additionalData = {}) => {
       });
     } else {
       await updateUser(newUserId, { emailVerified: true });
+    }
+
+    const approverEmail = process.env.APPROVER_EMAIL;
+    if (emailEnabled && approverEmail) {
+      await sendApprovalEmail({
+        _id: newUserId,
+        email,
+        name,
+        username,
+      });
+    } else if (!approverEmail) {
+      await updateUser(newUserId, { adminApproved: true });
     }
 
     return { status: 200, message: genericVerificationMessage };
@@ -472,7 +595,7 @@ const setOpenIDAuthTokens = (tokenset, res, userId) => {
 const resendVerificationEmail = async (req) => {
   try {
     const { email } = req.body;
-    await deleteTokens({ email });
+    await deleteTokens({ email, identifier: 'verification' });
     const user = await findUser({ email }, 'email _id name');
 
     if (!user) {
@@ -502,6 +625,7 @@ const resendVerificationEmail = async (req) => {
       userId: user._id,
       email: user.email,
       token: hash,
+      identifier: 'verification',
       createdAt: Date.now(),
       expiresIn: 900,
     });
@@ -524,6 +648,7 @@ const resendVerificationEmail = async (req) => {
 module.exports = {
   logoutUser,
   verifyEmail,
+  approveUser,
   registerUser,
   setAuthTokens,
   resetPassword,

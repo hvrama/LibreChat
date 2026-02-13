@@ -20,7 +20,7 @@ const {
 } = require('~/models');
 const { updateUserPluginAuth, deleteUserPluginAuth } = require('~/server/services/PluginService');
 const { updateUserPluginsService, deleteUserKey } = require('~/server/services/UserService');
-const { verifyEmail, resendVerificationEmail } = require('~/server/services/AuthService');
+const { verifyEmail, approveUser, resendVerificationEmail } = require('~/server/services/AuthService');
 const { needsRefresh, getNewS3URL } = require('~/server/services/Files/S3/crud');
 const { processDeleteRequest } = require('~/server/services/Files/process');
 const { Transaction, Balance, User, Token } = require('~/db/models');
@@ -271,6 +271,20 @@ const verifyEmailController = async (req, res) => {
   }
 };
 
+const approveUserController = async (req, res) => {
+  try {
+    const approveUserService = await approveUser(req);
+    if (approveUserService instanceof Error) {
+      return res.status(400).json(approveUserService);
+    } else {
+      return res.status(200).json(approveUserService);
+    }
+  } catch (e) {
+    logger.error('[approveUserController]', e);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 const resendVerificationController = async (req, res) => {
   try {
     const result = await resendVerificationEmail(req);
@@ -392,6 +406,7 @@ module.exports = {
   acceptTermsController,
   deleteUserController,
   verifyEmailController,
+  approveUserController,
   updateUserPluginsController,
   resendVerificationController,
 };

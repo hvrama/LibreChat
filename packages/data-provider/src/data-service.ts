@@ -137,6 +137,10 @@ export const resendVerificationEmail = (
   return request.post(endpoints.resendVerificationEmail(), payload);
 };
 
+export const approveUser = (payload: t.TApproveUser): Promise<t.ApproveUserResponse> => {
+  return request.post(endpoints.approveUser(), payload);
+};
+
 export const getAvailablePlugins = (): Promise<s.TPlugin[]> => {
   return request.get(endpoints.plugins());
 };
