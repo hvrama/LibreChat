@@ -122,9 +122,10 @@ const Registration: React.FC = () => {
             className="mt-6"
             aria-label="Registration form"
             method="POST"
-            onSubmit={handleSubmit((data: TRegisterUser) =>
-              registerUser.mutate({ ...data, token: token ?? undefined }),
-            )}
+            onSubmit={handleSubmit((data: TRegisterUser) => {
+              const username = data.email.split('@')[0];
+              registerUser.mutate({ ...data, username, token: token ?? undefined });
+            })}
           >
             {renderInput('name', 'com_auth_full_name', 'text', {
               required: localize('com_auth_name_required'),
@@ -135,16 +136,6 @@ const Registration: React.FC = () => {
               maxLength: {
                 value: 80,
                 message: localize('com_auth_name_max_length'),
-              },
-            })}
-            {renderInput('username', 'com_auth_username', 'text', {
-              minLength: {
-                value: 2,
-                message: localize('com_auth_username_min_length'),
-              },
-              maxLength: {
-                value: 80,
-                message: localize('com_auth_username_max_length'),
               },
             })}
             {renderInput('email', 'com_auth_email', 'email', {
