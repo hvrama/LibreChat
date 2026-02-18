@@ -246,7 +246,7 @@ const getResourcePermissions = async (req, res) => {
         principals.push({
           type: PrincipalType.USER,
           id: result.userInfo._id.toString(),
-          name: result.userInfo.name || result.userInfo.username,
+          name: result.userInfo.name || result.userInfo.username || result.userInfo.email,
           email: result.userInfo.email,
           avatar: result.userInfo.avatar,
           source: !result.userInfo._id ? 'entra' : 'local',

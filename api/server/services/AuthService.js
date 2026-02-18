@@ -177,6 +177,7 @@ const registerUser = async (user, additionalData = {}) => {
   }
 
   const { email, password, name, username } = user;
+  const resolvedUsername = username || email.split('@')[0];
 
   let newUserId;
   try {
@@ -209,7 +210,7 @@ const registerUser = async (user, additionalData = {}) => {
     const newUserData = {
       provider: 'local',
       email,
-      username,
+      username: resolvedUsername,
       name,
       avatar: null,
       role: isFirstRegisteredUser ? SystemRoles.ADMIN : SystemRoles.USER,

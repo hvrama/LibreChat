@@ -374,7 +374,7 @@ export type TRegisterUserResponse = {
 export type TRegisterUser = {
   name: string;
   email: string;
-  username: string;
+  username?: string;
   password: string;
   confirm_password?: string;
   token?: string;
