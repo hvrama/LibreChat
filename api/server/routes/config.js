@@ -30,10 +30,14 @@ const sharePointFilePickerEnabled = isEnabled(process.env.ENABLE_SHAREPOINT_FILE
 const openidReuseTokens = isEnabled(process.env.OPENID_REUSE_TOKENS);
 
 router.get('/', async function (req, res) {
+  const isPublicPort = req.headers['x-librechat-port'] === 'public';
   const cache = getLogStores(CacheKeys.CONFIG_STORE);
 
   const cachedStartupConfig = await cache.get(CacheKeys.STARTUP_CONFIG);
   if (cachedStartupConfig) {
+    if (isPublicPort) {
+      return res.send({ ...cachedStartupConfig, registrationEnabled: false });
+    }
     res.send(cachedStartupConfig);
     return;
   }
@@ -184,6 +188,9 @@ router.get('/', async function (req, res) {
     }
 
     await cache.set(CacheKeys.STARTUP_CONFIG, payload);
+    if (isPublicPort) {
+      return res.status(200).send({ ...payload, registrationEnabled: false });
+    }
     return res.status(200).send(payload);
   } catch (err) {
     logger.error('Error in startup config', err);
