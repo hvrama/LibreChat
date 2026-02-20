@@ -33,6 +33,13 @@ const Registration: React.FC = () => {
   const token = queryParams.get('token');
   const validTheme = isDark(theme) ? 'dark' : 'light';
 
+  // Redirect to login if registration is disabled (e.g. public port)
+  React.useEffect(() => {
+    if (!isFetching && startupConfig && !startupConfig.registrationEnabled) {
+      navigate('/login', { replace: true });
+    }
+  }, [isFetching, startupConfig, navigate]);
+
   // only require captcha if we have a siteKey
   const requireCaptcha = Boolean(startupConfig?.turnstile?.siteKey);
 
