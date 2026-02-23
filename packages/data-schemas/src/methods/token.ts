@@ -71,7 +71,7 @@ export function createTokenMethods(mongoose: typeof import('mongoose')) {
       }
 
       return await Token.deleteMany({
-        $or: conditions,
+        $and: conditions,
       });
     } catch (error) {
       logger.debug('An error occurred while deleting tokens:', error);
