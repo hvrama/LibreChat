@@ -393,13 +393,14 @@ const requestPasswordReset = async (req) => {
     };
   }
 
-  await deleteTokens({ userId: user._id });
+  await deleteTokens({ userId: user._id, identifier: 'password_reset' });
 
   const [resetToken, hash] = createTokenHash();
 
   await createToken({
     userId: user._id,
     token: hash,
+    identifier: 'password_reset',
     createdAt: Date.now(),
     expiresIn: 900,
   });
@@ -445,6 +446,7 @@ const resetPassword = async (userId, token, password) => {
   let passwordResetToken = await findToken(
     {
       userId,
+      identifier: 'password_reset',
     },
     { sort: { createdAt: -1 } },
   );
