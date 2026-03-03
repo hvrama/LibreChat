@@ -62,6 +62,18 @@ const startServer = async () => {
   const indexPath = path.join(appConfig.paths.dist, 'index.html');
   let indexHTML = fs.readFileSync(indexPath, 'utf8');
 
+  let manifestJSON;
+  try {
+    const manifestPath = path.join(appConfig.paths.dist, 'manifest.webmanifest');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const appTitle = process.env.APP_TITLE || 'LibreChat';
+    manifest.name = appTitle;
+    manifest.short_name = appTitle;
+    manifestJSON = JSON.stringify(manifest);
+  } catch (e) {
+    logger.warn('[PWA] Could not read manifest.webmanifest; serving static file as fallback', e);
+  }
+
   // In order to provide support to serving the application in a sub-directory
   // We need to update the base href if the DOMAIN_CLIENT is specified and not the root path
   if (process.env.DOMAIN_CLIENT) {
@@ -89,6 +101,14 @@ const startServer = async () => {
     app.use(compression());
   } else {
     console.warn('Response compression has been disabled via DISABLE_COMPRESSION.');
+  }
+
+  if (manifestJSON) {
+    app.get('/manifest.webmanifest', (_req, res) => {
+      res.setHeader('Content-Type', 'application/manifest+json');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.send(manifestJSON);
+    });
   }
 
   app.use(staticCache(appConfig.paths.dist));
