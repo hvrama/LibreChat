@@ -269,14 +269,14 @@ const approveUser = async (req) => {
   if (approverEmail && checkEmailConfig()) {
     await sendEmail({
       email: approverEmail,
-      subject: `User approved - ${decodedEmail}`,
+      subject: `User approved - ${user.name || user.username || decodedEmail} (${decodedEmail})`,
       payload: {
         appName: process.env.APP_TITLE || 'LibreChat',
         userName: user.name || user.username || decodedEmail,
         userEmail: decodedEmail,
         year: new Date().getFullYear(),
       },
-      template: 'approvalConfirmation.handlebars',
+      template: 'approvalAdminNotification.handlebars',
       throwError: false,
     });
     logger.info(`[approveUser] Approval confirmation email sent to approver [Email: ${approverEmail}]`);
