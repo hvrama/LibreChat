@@ -1,7 +1,7 @@
 import { memo, useRef, useMemo, useEffect, useState, useCallback } from 'react';
 import { useWatch } from 'react-hook-form';
 import { TextareaAutosize } from '@librechat/client';
-import { useRecoilState, useRecoilValue } from 'recoil';
+import { useRecoilState, useRecoilValue, useSetRecoilState } from 'recoil';
 import { Constants, isAssistantsEndpoint, isAgentsEndpoint } from 'librechat-data-provider';
 import {
   useChatContext,
@@ -60,6 +60,9 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
   const [showMentionPopover, setShowMentionPopover] = useRecoilState(
     store.showMentionPopoverFamily(index),
   );
+
+  const slashCommandEnabled = useRecoilValue(store.slashCommand);
+  const setShowPromptsPopover = useSetRecoilState(store.showPromptsPopoverFamily(index));
 
   const { requiresKey } = useRequiresKey();
   const methods = useChatFormContext();
@@ -151,6 +154,16 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
   });
 
   useQueryParams({ textAreaRef });
+
+  useEffect(() => {
+    if (
+      slashCommandEnabled &&
+      conversationId === Constants.NEW_CONVO &&
+      conversation?.messages?.length === 0
+    ) {
+      setShowPromptsPopover(true);
+    }
+  }, [conversationId, conversation?.messages?.length, slashCommandEnabled, setShowPromptsPopover]);
 
   const { ref, ...registerProps } = methods.register('text', {
     required: true,
