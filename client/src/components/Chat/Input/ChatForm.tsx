@@ -156,14 +156,10 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
   useQueryParams({ textAreaRef });
 
   useEffect(() => {
-    if (
-      slashCommandEnabled &&
-      conversationId === Constants.NEW_CONVO &&
-      conversation?.messages?.length === 0
-    ) {
+    if (slashCommandEnabled && conversationId === Constants.NEW_CONVO) {
       setShowPromptsPopover(true);
     }
-  }, [conversationId, conversation?.messages?.length, slashCommandEnabled, setShowPromptsPopover]);
+  }, [conversationId, slashCommandEnabled, setShowPromptsPopover]);
 
   const { ref, ...registerProps } = methods.register('text', {
     required: true,
