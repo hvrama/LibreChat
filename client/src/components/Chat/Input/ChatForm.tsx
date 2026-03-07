@@ -157,7 +157,10 @@ const ChatForm = memo(({ index = 0 }: { index?: number }) => {
 
   useEffect(() => {
     if (slashCommandEnabled && conversationId === Constants.NEW_CONVO) {
-      setShowPromptsPopover(true);
+      // Delay to let useFocusChatEffect and other focus effects settle,
+      // otherwise the popover's autoFocus input loses focus and onBlur closes it.
+      const timer = setTimeout(() => setShowPromptsPopover(true), 200);
+      return () => clearTimeout(timer);
     }
   }, [conversationId, slashCommandEnabled, setShowPromptsPopover]);
 
