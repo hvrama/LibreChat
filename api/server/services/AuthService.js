@@ -361,7 +361,7 @@ const registerUser = async (user, additionalData = {}) => {
     }
 
     const approverEmail = process.env.APPROVER_EMAIL;
-    if (emailEnabled && approverEmail) {
+    if (!additionalData.adminApproved && emailEnabled && approverEmail) {
       await sendApprovalEmail({
         _id: newUserId,
         email,
