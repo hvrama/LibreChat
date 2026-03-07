@@ -265,6 +265,23 @@ const approveUser = async (req) => {
     logger.info(`[approveUser] Approval notification email sent [Email: ${decodedEmail}]`);
   }
 
+  const approverEmail = process.env.APPROVER_EMAIL;
+  if (approverEmail && checkEmailConfig()) {
+    await sendEmail({
+      email: approverEmail,
+      subject: `User approved - ${decodedEmail}`,
+      payload: {
+        appName: process.env.APP_TITLE || 'LibreChat',
+        userName: user.name || user.username || decodedEmail,
+        userEmail: decodedEmail,
+        year: new Date().getFullYear(),
+      },
+      template: 'approvalConfirmation.handlebars',
+      throwError: false,
+    });
+    logger.info(`[approveUser] Approval confirmation email sent to approver [Email: ${approverEmail}]`);
+  }
+
   return { message: 'User has been approved successfully', status: 'success' };
 };
 
