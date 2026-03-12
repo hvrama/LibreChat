@@ -61,6 +61,7 @@ function PromptsCommand({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [isVariableDialogOpen, setVariableDialogOpen] = useState(false);
   const [variableGroup, setVariableGroup] = useState<TPromptGroup | null>(null);
+  const [showBottomFade, setShowBottomFade] = useState(false);
   const setShowPromptsPopover = useSetRecoilState(store.showPromptsPopoverFamily(index));
 
   const prompts = useMemo(() => data?.promptGroups, [data]);
@@ -125,6 +126,10 @@ function PromptsCommand({
     const currentActiveItem = document.getElementById(`prompt-item-${activeIndex}`);
     currentActiveItem?.scrollIntoView({ behavior: 'instant', block: 'nearest' });
   }, [activeIndex]);
+
+  useEffect(() => {
+    setShowBottomFade(matches.length * ROW_HEIGHT > 160);
+  }, [matches.length]);
 
   if (!hasAccess) {
     return null;
@@ -221,20 +226,28 @@ function PromptsCommand({
 
               if (!isLoading && open) {
                 return (
-                  <div className="max-h-40">
-                    <AutoSizer disableHeight>
-                      {({ width }) => (
-                        <List
-                          width={width}
-                          overscanRowCount={5}
-                          rowHeight={ROW_HEIGHT}
-                          rowCount={matches.length}
-                          rowRenderer={rowRenderer}
-                          scrollToIndex={activeIndex}
-                          height={Math.min(matches.length * ROW_HEIGHT, 160)}
-                        />
-                      )}
-                    </AutoSizer>
+                  <div className="relative">
+                    <div className="max-h-40">
+                      <AutoSizer disableHeight>
+                        {({ width }) => (
+                          <List
+                            width={width}
+                            overscanRowCount={5}
+                            rowHeight={ROW_HEIGHT}
+                            rowCount={matches.length}
+                            rowRenderer={rowRenderer}
+                            scrollToIndex={activeIndex}
+                            height={Math.min(matches.length * ROW_HEIGHT, 160)}
+                            onScroll={({ scrollTop, clientHeight, scrollHeight }) => {
+                              setShowBottomFade(scrollTop + clientHeight < scrollHeight - 5);
+                            }}
+                          />
+                        )}
+                      </AutoSizer>
+                    </div>
+                    {showBottomFade && (
+                      <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-surface-tertiary-alt to-transparent" />
+                    )}
                   </div>
                 );
               }
