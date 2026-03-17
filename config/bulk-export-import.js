@@ -24,15 +24,16 @@ const MSG_STRIP_FIELDS = ['_id', '__v', '_meiliIndex'];
 function printUsage() {
   console.log(`
 Usage:
-  node config/bulk-export-import.js --export --file <path> [--user <userId>]
-  node config/bulk-export-import.js --import --file <path> --user <targetUserId>
+  node config/bulk-export-import.js --export --file <path> [--user <userId|email>]
+  node config/bulk-export-import.js --import --file <path> --user <targetUserId|email>
 
 Options:
   --export          Export conversations from the database
   --import          Import conversations into the database
   --file <path>     Path to the JSON file (output for export, input for import)
-  --user <id>       For export: filter by user ID (omit to export all users)
-                    For import: target user ID (required)
+  --user <value>    User ID or email address.
+                    For export: filter by user (omit to export all users)
+                    For import: target user (required)
   --help            Show this help message
 
 Environment:
@@ -43,15 +44,16 @@ Examples:
   # Export all conversations
   node config/bulk-export-import.js --export --file ./backup.json
 
-  # Export a specific user's conversations
+  # Export a specific user's conversations (by email or ID)
+  node config/bulk-export-import.js --export --file ./backup.json --user user@example.com
   node config/bulk-export-import.js --export --file ./backup.json --user 65f1ad8c90523874d2d409f8
 
-  # Import conversations under a target user
-  node config/bulk-export-import.js --import --file ./backup.json --user 65f1ad8c90523874d2d409f8
+  # Import conversations under a target user (by email or ID)
+  node config/bulk-export-import.js --import --file ./backup.json --user user@example.com
 
 npm scripts:
   npm run bulk-export -- --file ./backup.json
-  npm run bulk-import -- --file ./backup.json --user TARGET_USER_ID
+  npm run bulk-import -- --file ./backup.json --user user@example.com
 `);
 }
 
@@ -86,6 +88,32 @@ function stripFields(doc, fields) {
     delete cleaned[field];
   }
   return cleaned;
+}
+
+/**
+ * Resolves a --user value to a MongoDB user ID.
+ * Accepts either a user ID string or an email address.
+ * @param {string} userValue - User ID or email address.
+ * @returns {Promise<string>} The resolved user ID.
+ */
+async function resolveUserId(userValue) {
+  if (!userValue) {
+    return null;
+  }
+
+  // If it looks like an email, look up by email
+  if (userValue.includes('@')) {
+    const user = await User.findOne({ email: userValue.toLowerCase() }).lean();
+    if (!user) {
+      console.red(`Error: No user found with email "${userValue}".`);
+      console.yellow('Tip: Use "npm run list-users" to find valid users.');
+      return null;
+    }
+    console.purple(`Resolved email "${userValue}" to user ID: ${user._id}`);
+    return user._id.toString();
+  }
+
+  return userValue;
 }
 
 /**
@@ -160,7 +188,7 @@ async function importConversations(filePath, targetUserId) {
   const targetUser = await User.findById(targetUserId).lean();
   if (!targetUser) {
     console.red(`Error: No user found with ID "${targetUserId}".`);
-    console.yellow('Tip: Use "npm run list-users" to find valid user IDs.');
+    console.yellow('Tip: Use "npm run list-users" to find valid users.');
     return;
   }
   console.purple(`Importing conversations for user: ${targetUser.email || targetUser.name || targetUserId}`);
@@ -309,21 +337,33 @@ async function gracefulExit(code = 0) {
 
   await connect();
 
+  // Resolve user (email or ID) to a user ID
+  const userId = args.user ? await resolveUserId(args.user) : null;
+  if (args.user && !userId) {
+    return gracefulExit(1);
+  }
+
+  if (args.import && !userId) {
+    console.red('Error: --user is required for import (target user ID or email).');
+    printUsage();
+    return gracefulExit(1);
+  }
+
   console.purple('---------------');
 
   if (args.export) {
     console.purple('Bulk Export Conversations');
     console.purple('---------------');
-    if (args.user) {
-      console.purple(`Filtering by user: ${args.user}`);
+    if (userId) {
+      console.purple(`Filtering by user: ${userId}`);
     } else {
       console.purple('Exporting all users\' conversations');
     }
-    await exportConversations(args.file, args.user);
+    await exportConversations(args.file, userId);
   } else {
     console.purple('Bulk Import Conversations');
     console.purple('---------------');
-    await importConversations(args.file, args.user);
+    await importConversations(args.file, userId);
   }
 
   return gracefulExit(0);
