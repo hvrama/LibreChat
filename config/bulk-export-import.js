@@ -25,16 +25,19 @@ function printUsage() {
   console.log(`
 Usage:
   node config/bulk-export-import.js --export --file <path> [--user <userId|email>]
+  node config/bulk-export-import.js --export --file <path> --conversation <conversationId>
   node config/bulk-export-import.js --import --file <path> --user <targetUserId|email>
 
 Options:
-  --export          Export conversations from the database
-  --import          Import conversations into the database
-  --file <path>     Path to the JSON file (output for export, input for import)
-  --user <value>    User ID or email address.
-                    For export: filter by user (omit to export all users)
-                    For import: target user (required)
-  --help            Show this help message
+  --export              Export conversations from the database
+  --import              Import conversations into the database
+  --file <path>         Path to the JSON file (output for export, input for import)
+  --user <value>        User ID or email address.
+                        For export: filter by user (omit to export all users)
+                        For import: target user (required)
+  --conversation <id>   Export a single conversation by its ID.
+                        Output uses LibreChat format importable via the UI.
+  --help                Show this help message
 
 Environment:
   MONGO_URI is read from your .env file via config/connect.js.
@@ -46,13 +49,16 @@ Examples:
 
   # Export a specific user's conversations (by email or ID)
   node config/bulk-export-import.js --export --file ./backup.json --user user@example.com
-  node config/bulk-export-import.js --export --file ./backup.json --user 65f1ad8c90523874d2d409f8
+
+  # Export a single conversation (UI-importable format)
+  node config/bulk-export-import.js --export --file ./convo.json --conversation af1ea676-f525-444f-a9ed-7c8dbf062733
 
   # Import conversations under a target user (by email or ID)
   node config/bulk-export-import.js --import --file ./backup.json --user user@example.com
 
 npm scripts:
   npm run bulk-export -- --file ./backup.json
+  npm run bulk-export -- --file ./convo.json --conversation CONVERSATION_ID
   npm run bulk-import -- --file ./backup.json --user user@example.com
 `);
 }
@@ -65,6 +71,7 @@ function parseCliArgs() {
         import: { type: 'boolean', default: false },
         file: { type: 'string' },
         user: { type: 'string' },
+        conversation: { type: 'string' },
         help: { type: 'boolean', default: false },
       },
       strict: true,
@@ -114,6 +121,49 @@ async function resolveUserId(userValue) {
   }
 
   return userValue;
+}
+
+/**
+ * Export a single conversation in LibreChat format (importable via the UI).
+ * Produces a JSON file with: conversationId, endpoint, title, messages[], etc.
+ */
+async function exportSingleConversation(filePath, conversationId) {
+  const convo = await Conversation.findOne({ conversationId }).lean();
+  if (!convo) {
+    console.red(`Error: No conversation found with ID "${conversationId}".`);
+    return;
+  }
+
+  const messages = await Message.find({ conversationId })
+    .lean()
+    .sort({ createdAt: 1 });
+
+  const cleanedMessages = messages.map((msg) => stripFields(msg, MSG_STRIP_FIELDS));
+
+  const exportData = {
+    conversationId: convo.conversationId,
+    endpoint: convo.endpoint,
+    title: convo.title,
+    exportAt: new Date().toTimeString(),
+    branches: false,
+    recursive: false,
+    options: {
+      model: convo.model,
+      endpoint: convo.endpoint,
+      chatGptLabel: convo.chatGptLabel || null,
+      promptPrefix: convo.promptPrefix || null,
+      temperature: convo.temperature,
+      top_p: convo.top_p,
+      presence_penalty: convo.presence_penalty,
+      frequency_penalty: convo.frequency_penalty,
+      title: convo.title,
+    },
+    messages: cleanedMessages,
+  };
+
+  fs.writeFileSync(filePath, JSON.stringify(exportData, null, 2), 'utf8');
+  console.green(`Exported conversation "${convo.title}" (${messages.length} messages) to ${filePath}`);
+  console.green('This file can be imported via the LibreChat UI (Settings > Data Controls > Import).');
 }
 
 /**
@@ -351,7 +401,11 @@ async function gracefulExit(code = 0) {
 
   console.purple('---------------');
 
-  if (args.export) {
+  if (args.export && args.conversation) {
+    console.purple('Export Single Conversation (UI-importable)');
+    console.purple('---------------');
+    await exportSingleConversation(args.file, args.conversation);
+  } else if (args.export) {
     console.purple('Bulk Export Conversations');
     console.purple('---------------');
     if (userId) {
