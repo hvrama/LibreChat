@@ -18,7 +18,7 @@ const { logAxiosError, isEnabled, readFileAsString } = require('@librechat/api')
  * @param {string} params.html - The HTML content of the email.
  * @returns {Promise<Object>} - A promise that resolves to the response from Mailgun API.
  */
-const sendEmailViaMailgun = async ({ to, from, subject, html }) => {
+const sendEmailViaMailgun = async ({ to, from, subject, html, attachments }) => {
   const mailgunApiKey = process.env.MAILGUN_API_KEY;
   const mailgunDomain = process.env.MAILGUN_DOMAIN;
   const mailgunHost = process.env.MAILGUN_HOST || 'https://api.mailgun.net';
@@ -33,6 +33,18 @@ const sendEmailViaMailgun = async ({ to, from, subject, html }) => {
   formData.append('subject', subject);
   formData.append('html', html);
   formData.append('o:tracking-clicks', 'no');
+
+  if (attachments && attachments.length > 0) {
+    for (const attachment of attachments) {
+      const buffer = Buffer.isBuffer(attachment.content)
+        ? attachment.content
+        : Buffer.from(attachment.content);
+      formData.append('attachment', buffer, {
+        filename: attachment.filename,
+        contentType: attachment.contentType || 'application/octet-stream',
+      });
+    }
+  }
 
   try {
     const response = await axios.post(`${mailgunHost}/v3/${mailgunDomain}/messages`, formData, {
@@ -90,7 +102,7 @@ const sendEmailViaSMTP = async ({ transporterOptions, mailOptions }) => {
  *
  * @throws Will throw an error if the email sending process fails and throwError is `true`.
  */
-const sendEmail = async ({ email, subject, payload, template, throwError = true }) => {
+const sendEmail = async ({ email, subject, payload, template, throwError = true, attachments }) => {
   try {
     const { content: source } = await readFileAsString(path.join(__dirname, 'emails', template));
     const compiledTemplate = handlebars.compile(source);
@@ -110,6 +122,7 @@ const sendEmail = async ({ email, subject, payload, template, throwError = true 
         to: toAddress,
         subject: subject,
         html: html,
+        attachments,
       });
     }
 
@@ -156,6 +169,14 @@ const sendEmail = async ({ email, subject, payload, template, throwError = true 
       subject: subject,
       html: html,
     };
+
+    if (attachments && attachments.length > 0) {
+      mailOptions.attachments = attachments.map((a) => ({
+        filename: a.filename,
+        content: a.content,
+        contentType: a.contentType || 'application/octet-stream',
+      }));
+    }
 
     return await sendEmailViaSMTP({ transporterOptions, mailOptions });
   } catch (error) {

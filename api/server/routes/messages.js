@@ -11,6 +11,7 @@ const {
 } = require('~/models');
 const { findAllArtifacts, replaceArtifactContent } = require('~/server/services/Artifacts/update');
 const { requireJwtAuth, validateMessageReq } = require('~/server/middleware');
+const { sendFeedbackNotification } = require('~/server/services/sendFeedbackNotification');
 const { cleanUpPrimaryKeyValue } = require('~/lib/utils/misc');
 const { getConvosQueried } = require('~/models/Conversation');
 const { countTokens } = require('~/server/utils');
@@ -294,6 +295,16 @@ router.put('/:conversationId/:messageId/feedback', validateMessageReq, async (re
       conversationId,
       feedback: updatedMessage.feedback,
     });
+
+    if (feedback?.rating === 'thumbsDown') {
+      sendFeedbackNotification({
+        userId: req.user.id,
+        userName: req.user.name || req.user.email,
+        conversationId,
+        messageId,
+        feedback,
+      }).catch((err) => logger.error('[feedbackNotification]', err));
+    }
   } catch (error) {
     logger.error('Error updating message feedback:', error);
     res.status(500).json({ error: 'Failed to update feedback' });
