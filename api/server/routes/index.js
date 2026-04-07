@@ -3,6 +3,7 @@ const assistants = require('./assistants');
 const categories = require('./categories');
 const tokenizer = require('./tokenizer');
 const endpoints = require('./endpoints');
+const privateStaticRoute = require('./privateStatic');
 const staticRoute = require('./static');
 const messages = require('./messages');
 const memories = require('./memories');
@@ -57,5 +58,6 @@ module.exports = {
   assistants,
   categories,
   staticRoute,
+  privateStaticRoute,
   accessPermissions,
 };
