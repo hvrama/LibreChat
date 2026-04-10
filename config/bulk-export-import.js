@@ -190,6 +190,9 @@ async function exportSingleConversation(filePath, conversationId) {
     return;
   }
 
+  const owner = await User.findById(convo.user).lean();
+  const prefixedTitle = owner?.email ? `[${owner.email}] ${convo.title}` : convo.title;
+
   const messages = await Message.find({ conversationId })
     .lean()
     .sort({ createdAt: 1 });
@@ -200,7 +203,7 @@ async function exportSingleConversation(filePath, conversationId) {
   const exportData = {
     conversationId: convo.conversationId,
     endpoint: convo.endpoint,
-    title: convo.title,
+    title: prefixedTitle,
     exportAt: new Date().toTimeString(),
     branches: true,
     recursive: false,
@@ -213,7 +216,7 @@ async function exportSingleConversation(filePath, conversationId) {
       top_p: convo.top_p,
       presence_penalty: convo.presence_penalty,
       frequency_penalty: convo.frequency_penalty,
-      title: convo.title,
+      title: prefixedTitle,
     },
     messages: cleanedMessages,
   };
@@ -253,15 +256,27 @@ async function exportConversations(filePath, userId) {
   );
 
   const cursor = Conversation.find(query).lean().cursor();
+  const userEmailCache = new Map();
   let count = 0;
 
   for await (const convo of cursor) {
+    // Resolve owner email (cached)
+    let ownerEmail = userEmailCache.get(convo.user);
+    if (ownerEmail === undefined) {
+      const owner = await User.findById(convo.user).lean();
+      ownerEmail = owner?.email || null;
+      userEmailCache.set(convo.user, ownerEmail);
+    }
+
     // Fetch all messages for this conversation
     const messages = await Message.find({ conversationId: convo.conversationId })
       .lean()
       .sort({ createdAt: 1 });
 
     const cleanedConvo = stripFields(convo, CONVO_STRIP_FIELDS);
+    if (ownerEmail) {
+      cleanedConvo.title = `[${ownerEmail}] ${cleanedConvo.title}`;
+    }
     cleanedConvo.messages = messages.map((msg) => stripFields(msg, MSG_STRIP_FIELDS));
     truncateToolCallOutputs(cleanedConvo.messages);
 
