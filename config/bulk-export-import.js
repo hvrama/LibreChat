@@ -20,6 +20,7 @@ const CONVO_STRIP_FIELDS = ['_id', '__v', 'messages'];
  * Fields to strip from message documents on export.
  */
 const MSG_STRIP_FIELDS = ['_id', '__v', '_meiliIndex'];
+const TOOL_CALL_OUTPUT_MAX_BYTES = 1024;
 
 function printUsage() {
   console.log(`
@@ -98,6 +99,61 @@ function stripFields(doc, fields) {
 }
 
 /**
+ * Truncates a string value to the byte limit, appending a truncation notice.
+ * @param {string} value - The string to truncate.
+ * @param {number} maxBytes - Maximum byte length.
+ * @returns {string} The truncated string, or original if within limit.
+ */
+function truncateString(value, maxBytes) {
+  const originalBytes = Buffer.byteLength(value, 'utf8');
+  if (originalBytes <= maxBytes) {
+    return value;
+  }
+  const truncatedBytes = originalBytes - maxBytes;
+  const truncatedKB = Math.round(truncatedBytes / 1024);
+  // Slice by bytes: encode, truncate, decode
+  const buf = Buffer.from(value, 'utf8').subarray(0, maxBytes);
+  // Decode safely — may cut a multi-byte char, so we use toString which replaces partial chars
+  const truncated = buf.toString('utf8');
+  return `${truncated}... [truncated ${truncatedKB} kB]`;
+}
+
+/**
+ * Truncates tool call outputs in message content arrays to TOOL_CALL_OUTPUT_MAX_BYTES.
+ * Mutates messages in place.
+ * @param {Object[]} messages - Array of message objects.
+ */
+function truncateToolCallOutputs(messages) {
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) {
+      continue;
+    }
+    for (const part of msg.content) {
+      if (part.type !== 'tool_call' || !part.tool_call) {
+        continue;
+      }
+      const tc = part.tool_call;
+      // function tool calls: output is a string
+      if (tc.function && typeof tc.function.output === 'string') {
+        tc.function.output = truncateString(tc.function.output, TOOL_CALL_OUTPUT_MAX_BYTES);
+      }
+      // code_interpreter: outputs is an array of items
+      if (tc.code_interpreter && Array.isArray(tc.code_interpreter.outputs)) {
+        for (const output of tc.code_interpreter.outputs) {
+          if (output.logs && typeof output.logs === 'string') {
+            output.logs = truncateString(output.logs, TOOL_CALL_OUTPUT_MAX_BYTES);
+          }
+        }
+      }
+      // generic output field on the tool call itself
+      if (typeof tc.output === 'string') {
+        tc.output = truncateString(tc.output, TOOL_CALL_OUTPUT_MAX_BYTES);
+      }
+    }
+  }
+}
+
+/**
  * Resolves a --user value to a MongoDB user ID.
  * Accepts either a user ID string or an email address.
  * @param {string} userValue - User ID or email address.
@@ -139,13 +195,14 @@ async function exportSingleConversation(filePath, conversationId) {
     .sort({ createdAt: 1 });
 
   const cleanedMessages = messages.map((msg) => stripFields(msg, MSG_STRIP_FIELDS));
+  truncateToolCallOutputs(cleanedMessages);
 
   const exportData = {
     conversationId: convo.conversationId,
     endpoint: convo.endpoint,
     title: convo.title,
     exportAt: new Date().toTimeString(),
-    branches: false,
+    branches: true,
     recursive: false,
     options: {
       model: convo.model,
@@ -206,6 +263,7 @@ async function exportConversations(filePath, userId) {
 
     const cleanedConvo = stripFields(convo, CONVO_STRIP_FIELDS);
     cleanedConvo.messages = messages.map((msg) => stripFields(msg, MSG_STRIP_FIELDS));
+    truncateToolCallOutputs(cleanedConvo.messages);
 
     if (count > 0) {
       writeStream.write(',');
