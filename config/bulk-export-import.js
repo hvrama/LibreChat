@@ -426,6 +426,7 @@ async function importConversations(filePath, targetUserId) {
         updateOne: {
           filter: { conversationId: convo.conversationId, user: targetUserId },
           update: { $set: { messages: messageIds } },
+          timestamps: false,
         },
       });
     }
