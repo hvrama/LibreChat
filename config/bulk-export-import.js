@@ -25,7 +25,7 @@ const TOOL_CALL_OUTPUT_MAX_BYTES = 1024;
 function printUsage() {
   console.log(`
 Usage:
-  node config/bulk-export-import.js --export --file <path> [--user <userId|email>]
+  node config/bulk-export-import.js --export --file <path> [--user <userId|email>] [--exclude-domain <domain>]
   node config/bulk-export-import.js --export --file <path> --conversation <conversationId>
   node config/bulk-export-import.js --import --file <path> --user <targetUserId|email>
 
@@ -36,6 +36,8 @@ Options:
   --user <value>        User ID or email address.
                         For export: filter by user (omit to export all users)
                         For import: target user (required)
+  --exclude-domain <d>  Exclude conversations from users with this email domain.
+                        For export only. Example: --exclude-domain example.com
   --conversation <id>   Export a single conversation by its ID.
                         Output uses LibreChat format importable via the UI.
   --help                Show this help message
@@ -50,6 +52,9 @@ Examples:
 
   # Export a specific user's conversations (by email or ID)
   node config/bulk-export-import.js --export --file ./backup.json --user user@example.com
+
+  # Export all conversations except those from a specific domain
+  node config/bulk-export-import.js --export --file ./backup.json --exclude-domain internal.corp
 
   # Export a single conversation (UI-importable format)
   node config/bulk-export-import.js --export --file ./convo.json --conversation af1ea676-f525-444f-a9ed-7c8dbf062733
@@ -72,6 +77,7 @@ function parseCliArgs() {
         import: { type: 'boolean', default: false },
         file: { type: 'string' },
         user: { type: 'string' },
+        'exclude-domain': { type: 'string' },
         conversation: { type: 'string' },
         help: { type: 'boolean', default: false },
       },
@@ -230,10 +236,24 @@ async function exportSingleConversation(filePath, conversationId) {
  * Export conversations (and their messages) to a JSON file.
  * Uses a streaming write to handle large datasets.
  */
-async function exportConversations(filePath, userId) {
+async function exportConversations(filePath, userId, excludeDomain) {
   const query = {};
   if (userId) {
     query.user = userId;
+  }
+
+  if (excludeDomain) {
+    const domainRegex = new RegExp(`@${excludeDomain.replace(/\./g, '\\.')}$`, 'i');
+    const excludedUsers = await User.find({ email: domainRegex }, '_id').lean();
+    const excludedIds = excludedUsers.map((u) => u._id);
+    if (excludedIds.length > 0) {
+      query.user = query.user
+        ? { $eq: query.user, $nin: excludedIds }
+        : { $nin: excludedIds };
+      console.purple(`Excluding ${excludedIds.length} user(s) with @${excludeDomain} emails.`);
+    } else {
+      console.gray(`No users found with @${excludeDomain} emails; nothing to exclude.`);
+    }
   }
 
   const totalConvos = await Conversation.countDocuments(query);
@@ -486,7 +506,7 @@ async function gracefulExit(code = 0) {
     } else {
       console.purple('Exporting all users\' conversations');
     }
-    await exportConversations(args.file, userId);
+    await exportConversations(args.file, userId, args['exclude-domain']);
   } else {
     console.purple('Bulk Import Conversations');
     console.purple('---------------');
