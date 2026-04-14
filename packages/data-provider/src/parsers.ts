@@ -432,5 +432,13 @@ export function replaceSpecialVars({ text, user }: { text: string; user?: t.TUse
     result = result.replace(/{{current_user}}/gi, user.name);
   }
 
+  if (user && user.persona) {
+    result = result.replace(/{{current_user_persona}}/gi, user.persona);
+  }
+
+  if (user && user.personaDescription) {
+    result = result.replace(/{{current_user_persona_description}}/gi, user.personaDescription);
+  }
+
   return result;
 }
