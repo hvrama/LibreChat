@@ -65,6 +65,10 @@ const PersonaModal = ({
                   testId="persona-dropdown"
                   ariaLabel={localize('com_ui_select_persona') ?? 'Select Your Persona'}
                 />
+                <p className="text-xs text-text-secondary">
+                  {localize('com_ui_persona_helper') ??
+                    'Choose a persona that best matches your role. This helps tailor responses to your needs.'}
+                </p>
               </div>
               <div className="flex flex-col gap-2">
                 <label className="text-sm font-medium text-text-primary">

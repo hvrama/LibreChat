@@ -1071,6 +1071,7 @@
   "com_ui_persona": "Persona",
   "com_ui_persona_description": "Persona Description",
   "com_ui_persona_description_placeholder": "Describe your persona...",
+  "com_ui_persona_helper": "Choose a persona that best matches your role. This helps tailor responses to your needs.",
   "com_ui_persona_update_failed": "Failed to update persona",
   "com_ui_select_persona": "Select Your Persona",
   "com_ui_preferences_updated": "Preferences updated successfully",
