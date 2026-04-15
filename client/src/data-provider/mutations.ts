@@ -1075,3 +1075,26 @@ export const useAcceptTermsMutation = (
     onMutate: options?.onMutate,
   });
 };
+
+export const useUpdatePersonaMutation = (
+  options?: t.UpdatePersonaMutationOptions,
+): UseMutationResult<
+  t.TUpdatePersonaResponse,
+  unknown,
+  { persona?: string; personaDescription?: string },
+  unknown
+> => {
+  const queryClient = useQueryClient();
+  return useMutation(
+    (data: { persona?: string; personaDescription?: string }) =>
+      dataService.updateUserPersona(data),
+    {
+      onSuccess: (data, variables, context) => {
+        queryClient.invalidateQueries([QueryKeys.user]);
+        options?.onSuccess?.(data, variables, context);
+      },
+      onError: options?.onError,
+      onMutate: options?.onMutate,
+    },
+  );
+};

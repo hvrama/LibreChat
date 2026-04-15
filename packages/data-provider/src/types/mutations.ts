@@ -327,6 +327,11 @@ export type AcceptTermsMutationOptions = MutationOptions<
   void
 >;
 
+export type UpdatePersonaMutationOptions = MutationOptions<
+  types.TUpdatePersonaResponse,
+  { persona?: string; personaDescription?: string }
+>;
+
 /* Tools */
 export type UpdatePluginAuthOptions = MutationOptions<types.TUser, types.TUpdateUserPlugins>;
 

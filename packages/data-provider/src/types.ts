@@ -634,6 +634,12 @@ export type TAcceptTermsResponse = {
   success: boolean;
 };
 
+export type TUpdatePersonaResponse = {
+  updated: boolean;
+  persona?: string;
+  personaDescription?: string;
+};
+
 export type TBannerResponse = TBanner | null;
 
 export type TUpdateFeedbackRequest = {

@@ -16,20 +16,21 @@ import {
   FileMapContext,
 } from '~/Providers';
 import { useUserTermsQuery, useGetStartupConfig } from '~/data-provider';
-import { TermsAndConditionsModal } from '~/components/ui';
+import { PersonaModal, TermsAndConditionsModal } from '~/components/ui';
 import { Nav, MobileNav } from '~/components/Nav';
 import { useHealthCheck } from '~/data-provider';
 import { Banner } from '~/components/Banners';
 
 export default function Root() {
   const [showTerms, setShowTerms] = useState(false);
+  const [showPersona, setShowPersona] = useState(false);
   const [bannerHeight, setBannerHeight] = useState(0);
   const [navVisible, setNavVisible] = useState(() => {
     const savedNavVisible = localStorage.getItem('navVisible');
     return savedNavVisible !== null ? JSON.parse(savedNavVisible) : true;
   });
 
-  const { isAuthenticated, logout } = useAuthContext();
+  const { user, isAuthenticated, logout } = useAuthContext();
 
   // Global health check - runs once per authenticated session
   useHealthCheck(isAuthenticated);
@@ -50,6 +51,16 @@ export default function Root() {
       setShowTerms(!termsData.termsAccepted);
     }
   }, [termsData]);
+
+  useEffect(() => {
+    if (isAuthenticated && user && !user.persona && !showTerms) {
+      setShowPersona(true);
+    }
+  }, [isAuthenticated, user, showTerms]);
+
+  const handlePersonaSaved = () => {
+    setShowPersona(false);
+  };
 
   const handleAcceptTerms = () => {
     setShowTerms(false);
@@ -92,6 +103,11 @@ export default function Root() {
               modalContent={config.interface.termsOfService.modalContent}
             />
           )}
+          <PersonaModal
+            open={showPersona}
+            onOpenChange={setShowPersona}
+            onSave={handlePersonaSaved}
+          />
         </AssistantsMapContext.Provider>
       </FileMapContext.Provider>
     </SetConvoProvider>
