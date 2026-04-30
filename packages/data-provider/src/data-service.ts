@@ -168,6 +168,12 @@ export const updateUserPlugins = (payload: t.TUpdateUserPlugins) => {
   return request.post(endpoints.userPlugins(), payload);
 };
 
+export const updateUserPersona = (
+  data: { persona?: string; personaDescription?: string },
+): Promise<{ updated: boolean; persona?: string; personaDescription?: string }> => {
+  return request.patch(endpoints.userPersona(), data);
+};
+
 export const reinitializeMCPServer = (serverName: string) => {
   return request.post(endpoints.mcpReinitialize(serverName));
 };

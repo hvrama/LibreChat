@@ -35,6 +35,8 @@ describe('replaceSpecialVars', () => {
   const mockUser = {
     name: 'Test User',
     id: 'user123',
+    persona: 'Software Engineer',
+    personaDescription: 'A senior developer working on backend systems',
   } as TUser;
 
   beforeEach(() => {
@@ -125,6 +127,48 @@ describe('replaceSpecialVars', () => {
     expect(result).toContain('2024-04-29 12:34:56 -04:00 (Monday)'); // current_datetime
     expect(result).toContain('2024-04-29T16:34:56.000Z'); // iso_datetime
     expect(result).toContain('Test User'); // current_user
+    expect(result).toContain('Software Engineer'); // current_user_persona
+    expect(result).toContain('A senior developer working on backend systems'); // current_user_persona_description
+  });
+
+  test('should replace {{current_user_persona}} with user persona', () => {
+    const result = replaceSpecialVars({
+      text: 'Role: {{current_user_persona}}',
+      user: mockUser,
+    });
+    expect(result).toBe('Role: Software Engineer');
+  });
+
+  test('should replace {{current_user_persona_description}} with user persona description', () => {
+    const result = replaceSpecialVars({
+      text: 'About: {{current_user_persona_description}}',
+      user: mockUser,
+    });
+    expect(result).toBe('About: A senior developer working on backend systems');
+  });
+
+  test('should not replace {{current_user_persona}} if user has no persona', () => {
+    const result = replaceSpecialVars({
+      text: 'Role: {{current_user_persona}}',
+      user: { id: 'user123', name: 'Test' } as TUser,
+    });
+    expect(result).toBe('Role: {{current_user_persona}}');
+  });
+
+  test('should not replace {{current_user_persona_description}} if user has no personaDescription', () => {
+    const result = replaceSpecialVars({
+      text: 'About: {{current_user_persona_description}}',
+      user: { id: 'user123', name: 'Test' } as TUser,
+    });
+    expect(result).toBe('About: {{current_user_persona_description}}');
+  });
+
+  test('should be case-insensitive for persona variables', () => {
+    const result = replaceSpecialVars({
+      text: '{{CURRENT_USER_PERSONA}} - {{Current_User_Persona_Description}}',
+      user: mockUser,
+    });
+    expect(result).toBe('Software Engineer - A senior developer working on backend systems');
   });
 });
 

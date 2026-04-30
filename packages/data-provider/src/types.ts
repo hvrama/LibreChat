@@ -201,6 +201,8 @@ export type TUser = {
   name: string;
   avatar: string;
   role: string;
+  persona?: string;
+  personaDescription?: string;
   provider: string;
   plugins?: string[];
   twoFactorEnabled?: boolean;

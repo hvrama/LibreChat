@@ -2016,6 +2016,8 @@ export const specialVariables = {
   current_user: true,
   iso_datetime: true,
   current_datetime: true,
+  current_user_persona: true,
+  current_user_persona_description: true,
 };
 
 export type TSpecialVarLabel = `com_ui_special_var_${keyof typeof specialVariables}`;

@@ -1,6 +1,7 @@
 const express = require('express');
 const {
   updateUserPluginsController,
+  updateUserPersonaController,
   resendVerificationController,
   getTermsStatusController,
   acceptTermsController,
@@ -24,6 +25,7 @@ router.get('/', requireJwtAuth, getUserController);
 router.get('/terms', requireJwtAuth, getTermsStatusController);
 router.post('/terms/accept', requireJwtAuth, acceptTermsController);
 router.post('/plugins', requireJwtAuth, updateUserPluginsController);
+router.patch('/persona', requireJwtAuth, updateUserPersonaController);
 router.delete('/delete', requireJwtAuth, canDeleteAccount, configMiddleware, deleteUserController);
 router.post('/verify', verifyEmailController);
 router.post('/verify/resend', verifyEmailLimiter, resendVerificationController);
