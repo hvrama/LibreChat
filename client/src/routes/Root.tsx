@@ -19,17 +19,18 @@ import {
 } from '~/Providers';
 import { useUserTermsQuery, useGetStartupConfig } from '~/data-provider';
 import { UnifiedSidebar } from '~/components/UnifiedSidebar';
-import { TermsAndConditionsModal } from '~/components/ui';
+import { TermsAndConditionsModal, PersonaSelectionModal } from '~/components/ui';
 import { useHealthCheck } from '~/data-provider';
 import { Banner } from '~/components/Banners';
 
 export default function Root() {
   const [showTerms, setShowTerms] = useState(false);
+  const [showPersona, setShowPersona] = useState(false);
   const [bannerHeight, setBannerHeight] = useState(0);
   const sidebarExpanded = useRecoilValue(store.sidebarExpanded);
   const isSmallScreen = useMediaQuery('(max-width: 768px)');
 
-  const { isAuthenticated, logout } = useAuthContext();
+  const { user, isAuthenticated, logout } = useAuthContext();
 
   useHealthCheck(isAuthenticated);
 
@@ -49,6 +50,15 @@ export default function Root() {
       setShowTerms(!termsData.termsAccepted);
     }
   }, [termsData]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !user) {
+      return;
+    }
+    if (!user.persona) {
+      setShowPersona(true);
+    }
+  }, [isAuthenticated, user]);
 
   const handleAcceptTerms = () => {
     setShowTerms(false);
@@ -98,6 +108,12 @@ export default function Root() {
               modalContent={config.interface.termsOfService.modalContent}
             />
           )}
+          <PersonaSelectionModal
+            open={showPersona}
+            onOpenChange={setShowPersona}
+            initialPersona={user?.persona}
+            initialDescription={user?.personaDescription}
+          />
         </AssistantsMapContext.Provider>
       </FileMapContext.Provider>
     </SetConvoProvider>

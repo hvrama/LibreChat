@@ -1050,3 +1050,33 @@ export const useAcceptTermsMutation = (
     onMutate: options?.onMutate,
   });
 };
+
+type UpdatePersonaPayload = { persona?: string; personaDescription?: string };
+type UpdatePersonaResponse = {
+  updated: boolean;
+  persona?: string;
+  personaDescription?: string;
+};
+
+export const useUpdatePersonaMutation = (options?: {
+  onSuccess?: (data: UpdatePersonaResponse) => void;
+  onError?: (error: unknown) => void;
+}): UseMutationResult<UpdatePersonaResponse, unknown, UpdatePersonaPayload, unknown> => {
+  const queryClient = useQueryClient();
+  return useMutation((payload: UpdatePersonaPayload) => dataService.updateUserPersona(payload), {
+    onSuccess: (data) => {
+      queryClient.setQueryData<t.TUser | undefined>([QueryKeys.user], (prev) => {
+        if (!prev) {
+          return prev;
+        }
+        return {
+          ...prev,
+          persona: data.persona ?? prev.persona,
+          personaDescription: data.personaDescription ?? prev.personaDescription,
+        };
+      });
+      options?.onSuccess?.(data);
+    },
+    onError: options?.onError,
+  });
+};
