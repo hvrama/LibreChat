@@ -1,6 +1,6 @@
 import { cn } from '~/utils';
 
-export default function CustomAgentIcon({
+export default function FallbackIcon({
   size = 25,
   className = '',
 }: {

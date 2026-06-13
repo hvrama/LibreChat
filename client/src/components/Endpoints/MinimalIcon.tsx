@@ -1,9 +1,9 @@
 import { EModelEndpoint, alternateName } from 'librechat-data-provider';
 import {
   Sparkles,
+  FallbackIcon,
   BedrockIcon,
   AnthropicIcon,
-  CustomAgentIcon,
   AzureMinimalIcon,
   OpenAIMinimalIcon,
   GoogleMinimalIcon,
@@ -43,7 +43,7 @@ const MinimalIcon: React.FC<IconProps> = (props) => {
     [EModelEndpoint.assistants]: { icon: <Sparkles className="icon-sm" />, name: 'Assistant' },
     [EModelEndpoint.azureAssistants]: { icon: <Sparkles className="icon-sm" />, name: 'Assistant' },
     [EModelEndpoint.agents]: {
-      icon: <CustomAgentIcon className="icon-sm" aria-hidden="true" />,
+      icon: <FallbackIcon className="icon-sm" aria-hidden="true" />,
       name: props.modelLabel ?? alternateName[EModelEndpoint.agents],
     },
     [EModelEndpoint.bedrock]: {

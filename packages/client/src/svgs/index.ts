@@ -74,4 +74,4 @@ export { default as TextPaths } from './TextPaths';
 export { default as VideoPaths } from './VideoPaths';
 export { default as SharePointIcon } from './SharePointIcon';
 export { default as MoonshotIcon } from './MoonshotIcon';
-export { default as CustomAgentIcon } from './CustomAgentIcon';
+export { default as FallbackIcon } from './FallbackIcon';

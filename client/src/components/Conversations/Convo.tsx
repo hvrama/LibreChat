@@ -7,7 +7,6 @@ import type { TConversation } from 'librechat-data-provider';
 import { useUpdateConversationMutation } from '~/data-provider';
 import EndpointIcon from '~/components/Endpoints/EndpointIcon';
 import { useNavigateToConvo, useLocalize, useShiftKey } from '~/hooks';
-import { useAgentsMapContext, useAssistantsMapContext } from '~/Providers';
 import { useGetEndpointsQuery } from '~/data-provider';
 import { NotificationSeverity } from '~/common';
 import { ConvoOptions } from './ConvoOptions';
@@ -34,8 +33,6 @@ export default function Conversation({
   const { showToast } = useToastContext();
   const { navigateToConvo } = useNavigateToConvo();
   const { data: endpointsConfig } = useGetEndpointsQuery();
-  const agentsMap = useAgentsMapContext();
-  const assistantMap = useAssistantsMapContext();
   const currentConvoId = useMemo(() => params.conversationId, [params.conversationId]);
   const updateConvoMutation = useUpdateConversationMutation(currentConvoId ?? '');
   const activeConvos = useRecoilValue(store.allConversationsSelector);
@@ -263,8 +260,6 @@ export default function Conversation({
             <EndpointIcon
               conversation={conversation}
               endpointsConfig={endpointsConfig}
-              agentsMap={agentsMap}
-              assistantMap={assistantMap}
               size={20}
               context="menu-item"
             />
