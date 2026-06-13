@@ -1,9 +1,9 @@
-import { Feather } from 'lucide-react';
 import { EModelEndpoint, alternateName } from 'librechat-data-provider';
 import {
   Sparkles,
   BedrockIcon,
   AnthropicIcon,
+  CustomAgentIcon,
   AzureMinimalIcon,
   OpenAIMinimalIcon,
   GoogleMinimalIcon,
@@ -43,7 +43,7 @@ const MinimalIcon: React.FC<IconProps> = (props) => {
     [EModelEndpoint.assistants]: { icon: <Sparkles className="icon-sm" />, name: 'Assistant' },
     [EModelEndpoint.azureAssistants]: { icon: <Sparkles className="icon-sm" />, name: 'Assistant' },
     [EModelEndpoint.agents]: {
-      icon: <Feather className="icon-sm" aria-hidden="true" />,
+      icon: <CustomAgentIcon className="icon-sm" aria-hidden="true" />,
       name: props.modelLabel ?? alternateName[EModelEndpoint.agents],
     },
     [EModelEndpoint.bedrock]: {
