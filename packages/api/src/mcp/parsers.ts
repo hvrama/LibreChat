@@ -7,6 +7,32 @@ function generateResourceId(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex').substring(0, 10);
 }
 
+/**
+ * Upper bound (in bytes) for the combined payload of UI resources persisted with a single
+ * message. UI resources are embedded directly in the message's `attachments` array, so their
+ * size counts against MongoDB's 16MB BSON document limit. Persisting more would make the
+ * MongoDB driver throw a buffer "offset is out of range" error when saving the message, losing
+ * the entire assistant response. The budget stays well under 16MB to leave room for the rest of
+ * the document (text content, metadata, other attachments).
+ */
+const MAX_UI_RESOURCE_BYTES = 10 * 1024 * 1024;
+
+function getResourceByteSize(resource: t.EmbeddedResource['resource']): number {
+  let size = 0;
+  if ('text' in resource && typeof resource.text === 'string') {
+    size += Buffer.byteLength(resource.text, 'utf8');
+  }
+  if ('blob' in resource && typeof resource.blob === 'string') {
+    size += Buffer.byteLength(resource.blob, 'utf8');
+  }
+  return size;
+}
+
+function formatByteSize(bytes: number): string {
+  const megabytes = bytes / (1024 * 1024);
+  return `${megabytes.toFixed(1)}MB`;
+}
+
 const RECOGNIZED_PROVIDERS = new Set([
   'google',
   'anthropic',
@@ -103,6 +129,7 @@ export function formatToolContent(
 
   const imageUrls: t.FormattedContent[] = [];
   const uiResources: UIResource[] = [];
+  let uiResourceBytes = 0;
   let currentTextBlock = '';
 
   type ContentHandler = undefined | ((item: t.ToolContentPart) => void);
@@ -133,18 +160,28 @@ export function formatToolContent(
       const resourceText: string[] = [];
 
       if (isUiResource) {
-        const contentToHash =
-          'text' in item.resource && item.resource.text && typeof item.resource.text === 'string'
-            ? item.resource.text
-            : item.resource.uri;
-        const resourceId = generateResourceId(contentToHash);
-        const uiResource: UIResource = {
-          ...item.resource,
-          resourceId,
-        };
-        uiResources.push(uiResource);
-        resourceText.push(`UI Resource ID: ${resourceId}`);
-        resourceText.push(`UI Resource Marker: \\ui{${resourceId}}`);
+        const resourceBytes = getResourceByteSize(item.resource);
+        if (uiResourceBytes + resourceBytes > MAX_UI_RESOURCE_BYTES) {
+          resourceText.push(
+            `UI Resource not displayed: its content (${formatByteSize(resourceBytes)}) exceeds the ` +
+              `maximum renderable size of ${formatByteSize(MAX_UI_RESOURCE_BYTES)}. ` +
+              `Consider returning the data as a downloadable file or a smaller payload.`,
+          );
+        } else {
+          uiResourceBytes += resourceBytes;
+          const contentToHash =
+            'text' in item.resource && item.resource.text && typeof item.resource.text === 'string'
+              ? item.resource.text
+              : item.resource.uri;
+          const resourceId = generateResourceId(contentToHash);
+          const uiResource: UIResource = {
+            ...item.resource,
+            resourceId,
+          };
+          uiResources.push(uiResource);
+          resourceText.push(`UI Resource ID: ${resourceId}`);
+          resourceText.push(`UI Resource Marker: \\ui{${resourceId}}`);
+        }
       } else if ('text' in item.resource && item.resource.text != null && item.resource.text) {
         resourceText.push(`Resource Text: ${item.resource.text}`);
       }

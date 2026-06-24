@@ -302,6 +302,48 @@ describe('formatToolContent', () => {
         },
       });
     });
+
+    it('should not persist UI resources whose embedded content exceeds the size budget', () => {
+      const oversizedText = 'a'.repeat(11 * 1024 * 1024);
+      const result: t.MCPToolCallResponse = {
+        content: [
+          {
+            type: 'resource',
+            resource: {
+              uri: 'ui://download/csv',
+              mimeType: 'text/html',
+              text: oversizedText,
+            },
+          },
+        ],
+      };
+
+      const [content, artifacts] = formatToolContent(result, 'openai');
+      expect(content).toContain('UI Resource not displayed');
+      expect(content).toContain('Resource URI: ui://download/csv');
+      expect(content).not.toContain('UI Resource Marker: \\ui{');
+      expect(artifacts).toBeUndefined();
+    });
+
+    it('should still persist UI resources within the size budget', () => {
+      const result: t.MCPToolCallResponse = {
+        content: [
+          {
+            type: 'resource',
+            resource: {
+              uri: 'ui://download/csv',
+              mimeType: 'text/html',
+              text: 'a'.repeat(1024),
+            },
+          },
+        ],
+      };
+
+      const [content, artifacts] = formatToolContent(result, 'openai');
+      expect(content).toContain('UI Resource Marker: \\ui{');
+      expect(content).not.toContain('UI Resource not displayed');
+      expect(artifacts?.ui_resources?.data).toHaveLength(1);
+    });
   });
 
   describe('unknown content types', () => {
