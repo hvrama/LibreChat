@@ -30,11 +30,14 @@ Usage:
   node config/bulk-export-import.js --export --file <path> [--user <userId|email>] [--exclude-domain <domain>]
   node config/bulk-export-import.js --export --file <path> --conversation <conversationId>
   node config/bulk-export-import.js --import --file <path> --user <targetUserId|email> [--no-projects]
+  node config/bulk-export-import.js --import --dir <path> --user <targetUserId|email> [--no-projects]
 
 Options:
   --export              Export conversations from the database
   --import              Import conversations into the database
   --file <path>         Path to the JSON file (output for export, input for import)
+  --dir <path>          Import only. Directory whose .json files are all imported,
+                        in filename order. Mutually exclusive with --file.
   --user <value>        User ID or email address.
                         For export: filter by user (omit to export all users)
                         For import: target user (required)
@@ -69,6 +72,9 @@ Examples:
   # email domain (e.g. "example.com"), created on demand.
   node config/bulk-export-import.js --import --file ./backup.json --user user@example.com
 
+  # Import every .json export in a directory
+  node config/bulk-export-import.js --import --dir ./backups --user user@example.com
+
   # Import without creating or assigning any projects
   node config/bulk-export-import.js --import --file ./backup.json --user user@example.com --no-projects
 
@@ -76,6 +82,7 @@ npm scripts:
   npm run bulk-export -- --file ./backup.json
   npm run bulk-export -- --file ./convo.json --conversation CONVERSATION_ID
   npm run bulk-import -- --file ./backup.json --user user@example.com
+  npm run bulk-import -- --dir ./backups --user user@example.com
 `);
 }
 
@@ -86,6 +93,7 @@ function parseCliArgs() {
         export: { type: 'boolean', default: false },
         import: { type: 'boolean', default: false },
         file: { type: 'string' },
+        dir: { type: 'string' },
         user: { type: 'string' },
         'exclude-domain': { type: 'string' },
         'no-projects': { type: 'boolean', default: false },
@@ -405,37 +413,48 @@ async function exportConversations(filePath, userId, excludeDomain) {
 }
 
 /**
- * Import conversations from a JSON file into the database under a target user.
- * Uses bulkWrite with upsert for idempotent imports.
+ * Lists the JSON files directly inside a directory, sorted by name.
+ * @param {string} dirPath - The directory to scan.
+ * @returns {string[]} Paths of the `.json` files found, in filename order.
  */
-async function importConversations(filePath, targetUserId, { groupByDomain = true } = {}) {
-  // Verify target user exists
-  const targetUser = await User.findById(targetUserId).lean();
-  if (!targetUser) {
-    console.red(`Error: No user found with ID "${targetUserId}".`);
-    console.yellow('Tip: Use "npm run list-users" to find valid users.');
-    return;
-  }
-  console.purple(`Importing conversations for user: ${targetUser.email || targetUser.name || targetUserId}`);
+function collectJsonFiles(dirPath) {
+  return fs
+    .readdirSync(dirPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
+    .map((entry) => path.join(dirPath, entry.name))
+    .sort();
+}
 
-  const fileData = fs.readFileSync(filePath, 'utf8');
-  const exportData = JSON.parse(fileData);
+/**
+ * Imports a single export file into the database under a target user.
+ * Uses bulkWrite with upsert for idempotent imports.
+ * @param {string} filePath - The export file to read.
+ * @param {string} targetUserId - The user the conversations are imported for.
+ * @param {Object} context - Shared import state across files.
+ * @returns {Promise<boolean>} False when the file was skipped.
+ */
+async function importConversationFile(filePath, targetUserId, context) {
+  const { groupByDomain, fallbackDomain, domainProjects, createdProjects } = context;
+
+  let exportData;
+  try {
+    exportData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (err) {
+    console.red(`Error: Could not read "${filePath}" as JSON: ${err.message}`);
+    return false;
+  }
 
   if (!exportData.exportVersion || !Array.isArray(exportData.conversations)) {
-    console.red('Error: Invalid export file format. Expected a librechat-bulk-export file.');
-    return;
+    console.red(`Error: "${filePath}" is not a valid librechat-bulk-export file. Skipping.`);
+    return false;
   }
 
   const conversations = exportData.conversations;
-  console.purple(`Found ${conversations.length} conversation(s) to import.`);
+  console.purple(`Found ${conversations.length} conversation(s) to import from ${filePath}.`);
 
   let totalConvos = 0;
   let totalMessages = 0;
   let unassignedConvos = 0;
-  /** @type {Map<string, string>} domain -> chat project id */
-  const domainProjects = new Map();
-  const createdProjects = new Set();
-  const fallbackDomain = getEmailDomain(targetUser.email);
 
   // Process in batches
   for (let i = 0; i < conversations.length; i += BATCH_SIZE) {
@@ -548,6 +567,59 @@ async function importConversations(filePath, targetUserId, { groupByDomain = tru
     }
   }
 
+  context.totalConvos += totalConvos;
+  context.totalMessages += totalMessages;
+  context.unassignedConvos += unassignedConvos;
+
+  console.green(
+    `Imported ${totalConvos} conversation(s), ${totalMessages} message(s) from ${filePath}.`,
+  );
+  return true;
+}
+
+/**
+ * Imports one or more export files into the database under a target user.
+ * Projects are shared across files so a domain maps to a single project.
+ * @param {string[]} filePaths - The export files to import, in order.
+ * @param {string} targetUserId - The user the conversations are imported for.
+ * @param {Object} [options] - Import options.
+ * @param {boolean} [options.groupByDomain=true] - Group conversations into domain projects.
+ * @returns {Promise<boolean>} False when any file failed to import.
+ */
+async function importConversations(filePaths, targetUserId, { groupByDomain = true } = {}) {
+  // Verify target user exists
+  const targetUser = await User.findById(targetUserId).lean();
+  if (!targetUser) {
+    console.red(`Error: No user found with ID "${targetUserId}".`);
+    console.yellow('Tip: Use "npm run list-users" to find valid users.');
+    return false;
+  }
+  console.purple(
+    `Importing conversations for user: ${targetUser.email || targetUser.name || targetUserId}`,
+  );
+  console.purple(`Importing ${filePaths.length} file(s).`);
+
+  const context = {
+    groupByDomain,
+    fallbackDomain: getEmailDomain(targetUser.email),
+    /** @type {Map<string, string>} domain -> chat project id */
+    domainProjects: new Map(),
+    createdProjects: new Set(),
+    totalConvos: 0,
+    totalMessages: 0,
+    unassignedConvos: 0,
+  };
+
+  const failedFiles = [];
+  for (const filePath of filePaths) {
+    const imported = await importConversationFile(filePath, targetUserId, context);
+    if (!imported) {
+      failedFiles.push(filePath);
+    }
+  }
+
+  const { domainProjects, createdProjects, unassignedConvos } = context;
+
   // Refresh conversation counts / recency stats on every touched project.
   if (domainProjects.size > 0) {
     console.gray('  Refreshing project statistics...');
@@ -562,7 +634,10 @@ async function importConversations(filePath, targetUserId, { groupByDomain = tru
     }
   }
 
-  console.green(`Import complete: ${totalConvos} conversations, ${totalMessages} messages.`);
+  console.green(
+    `Import complete: ${context.totalConvos} conversations, ${context.totalMessages} messages ` +
+      `from ${filePaths.length - failedFiles.length}/${filePaths.length} file(s).`,
+  );
 
   if (groupByDomain) {
     if (domainProjects.size > 0) {
@@ -577,6 +652,13 @@ async function importConversations(filePath, targetUserId, { groupByDomain = tru
       );
     }
   }
+
+  if (failedFiles.length > 0) {
+    console.red(`Skipped ${failedFiles.length} file(s): ${failedFiles.join(', ')}`);
+    return false;
+  }
+
+  return true;
 }
 
 async function gracefulExit(code = 0) {
@@ -607,8 +689,18 @@ async function gracefulExit(code = 0) {
     return silentExit(1);
   }
 
-  if (!args.file) {
-    console.red('Error: --file is required.');
+  if (args.export && args.dir) {
+    console.red('Error: --dir is only supported for --import. Use --file for exports.');
+    return silentExit(1);
+  }
+
+  if (args.file && args.dir) {
+    console.red('Error: Cannot use both --file and --dir at the same time.');
+    return silentExit(1);
+  }
+
+  if (!args.file && !args.dir) {
+    console.red(`Error: ${args.import ? '--file or --dir is' : '--file is'} required.`);
     printUsage();
     return silentExit(1);
   }
@@ -651,7 +743,25 @@ async function gracefulExit(code = 0) {
   } else {
     console.purple('Bulk Import Conversations');
     console.purple('---------------');
-    await importConversations(args.file, userId, { groupByDomain: !args['no-projects'] });
+    let filePaths = [args.file];
+    if (args.dir) {
+      if (!fs.existsSync(args.dir) || !fs.statSync(args.dir).isDirectory()) {
+        console.red(`Error: "${args.dir}" is not a directory.`);
+        return gracefulExit(1);
+      }
+      filePaths = collectJsonFiles(args.dir);
+      if (filePaths.length === 0) {
+        console.red(`Error: No .json files found in "${args.dir}".`);
+        return gracefulExit(1);
+      }
+    }
+
+    const imported = await importConversations(filePaths, userId, {
+      groupByDomain: !args['no-projects'],
+    });
+    if (!imported) {
+      return gracefulExit(1);
+    }
   }
 
   return gracefulExit(0);
