@@ -3,7 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
 const { parseArgs } = require('node:util');
-const { Conversation, Message, User } = require('@librechat/data-schemas').createModels(mongoose);
+const { Conversation, Message, User, ChatProject } =
+  require('@librechat/data-schemas').createModels(mongoose);
+const { refreshChatProjectStats } = require('@librechat/data-schemas').createMethods(mongoose);
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { silentExit } = require('./helpers');
 const connect = require('./connect');
@@ -27,7 +29,7 @@ function printUsage() {
 Usage:
   node config/bulk-export-import.js --export --file <path> [--user <userId|email>] [--exclude-domain <domain>]
   node config/bulk-export-import.js --export --file <path> --conversation <conversationId>
-  node config/bulk-export-import.js --import --file <path> --user <targetUserId|email>
+  node config/bulk-export-import.js --import --file <path> --user <targetUserId|email> [--no-projects]
 
 Options:
   --export              Export conversations from the database
@@ -38,6 +40,9 @@ Options:
                         For import: target user (required)
   --exclude-domain <d>  Exclude conversations from users with this email domain.
                         For export only. Example: --exclude-domain example.com
+  --no-projects         Import only. Skip grouping conversations into projects.
+                        By default, imported conversations are grouped into a
+                        project named after the original owner's email domain.
   --conversation <id>   Export a single conversation by its ID.
                         Output uses LibreChat format importable via the UI.
   --help                Show this help message
@@ -60,7 +65,12 @@ Examples:
   node config/bulk-export-import.js --export --file ./convo.json --conversation af1ea676-f525-444f-a9ed-7c8dbf062733
 
   # Import conversations under a target user (by email or ID)
+  # Conversations are grouped into projects named after each original owner's
+  # email domain (e.g. "example.com"), created on demand.
   node config/bulk-export-import.js --import --file ./backup.json --user user@example.com
+
+  # Import without creating or assigning any projects
+  node config/bulk-export-import.js --import --file ./backup.json --user user@example.com --no-projects
 
 npm scripts:
   npm run bulk-export -- --file ./backup.json
@@ -78,6 +88,7 @@ function parseCliArgs() {
         file: { type: 'string' },
         user: { type: 'string' },
         'exclude-domain': { type: 'string' },
+        'no-projects': { type: 'boolean', default: false },
         conversation: { type: 'string' },
         help: { type: 'boolean', default: false },
       },
@@ -88,6 +99,74 @@ function parseCliArgs() {
     printUsage();
     process.exit(1);
   }
+}
+
+/**
+ * Matches the `[owner@example.com] ` prefix that bulk exports prepend to titles.
+ */
+const TITLE_EMAIL_PREFIX = /^\[\s*([^\s\]]+@[^\s\]]+)\s*\]\s*/;
+
+/**
+ * Extracts the owner email recorded on an exported conversation.
+ * Prefers the explicit `ownerEmail` field and falls back to the title prefix
+ * written by older exports.
+ * @param {Object} convo - The exported conversation.
+ * @returns {string|null} The owner email, or null when unavailable.
+ */
+function getOwnerEmail(convo) {
+  if (typeof convo.ownerEmail === 'string' && convo.ownerEmail.includes('@')) {
+    return convo.ownerEmail;
+  }
+  const match = typeof convo.title === 'string' ? convo.title.match(TITLE_EMAIL_PREFIX) : null;
+  return match ? match[1] : null;
+}
+
+/**
+ * Extracts the domain part of an email address.
+ * @param {string|null|undefined} email - The email address.
+ * @returns {string|null} The lowercased domain, or null when not parseable.
+ */
+function getEmailDomain(email) {
+  if (typeof email !== 'string') {
+    return null;
+  }
+  const domain = email.split('@').pop();
+  if (!domain || domain === email) {
+    return null;
+  }
+  const normalized = domain.trim().toLowerCase();
+  return normalized || null;
+}
+
+/**
+ * Finds or creates the chat project named after an email domain for a user.
+ * Uses an upsert so repeated imports reuse the same project.
+ * @param {string} domain - The email domain, used as the project name.
+ * @param {string} userId - The owning user's ID.
+ * @returns {Promise<{ projectId: string, created: boolean }>} The project reference.
+ */
+async function getOrCreateDomainProject(domain, userId) {
+  const existing = await ChatProject.findOne({ user: userId, name: domain }).lean();
+  if (existing) {
+    return { projectId: existing._id.toString(), created: false };
+  }
+
+  const project = await ChatProject.findOneAndUpdate(
+    { user: userId, name: domain },
+    {
+      $setOnInsert: {
+        user: userId,
+        name: domain,
+        description: `Imported conversations from ${domain}`,
+        conversationCount: 0,
+        lastConversationAt: null,
+        lastConversationId: null,
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  ).lean();
+
+  return { projectId: project._id.toString(), created: true };
 }
 
 /**
@@ -296,6 +375,9 @@ async function exportConversations(filePath, userId, excludeDomain) {
     const cleanedConvo = stripFields(convo, CONVO_STRIP_FIELDS);
     if (ownerEmail) {
       cleanedConvo.title = `[${ownerEmail}] ${cleanedConvo.title}`;
+      // Recorded so imports can group conversations by the owner's email domain
+      // without having to parse the title prefix.
+      cleanedConvo.ownerEmail = ownerEmail;
     }
     cleanedConvo.messages = messages.map((msg) => stripFields(msg, MSG_STRIP_FIELDS));
     truncateToolCallOutputs(cleanedConvo.messages);
@@ -326,7 +408,7 @@ async function exportConversations(filePath, userId, excludeDomain) {
  * Import conversations from a JSON file into the database under a target user.
  * Uses bulkWrite with upsert for idempotent imports.
  */
-async function importConversations(filePath, targetUserId) {
+async function importConversations(filePath, targetUserId, { groupByDomain = true } = {}) {
   // Verify target user exists
   const targetUser = await User.findById(targetUserId).lean();
   if (!targetUser) {
@@ -349,6 +431,11 @@ async function importConversations(filePath, targetUserId) {
 
   let totalConvos = 0;
   let totalMessages = 0;
+  let unassignedConvos = 0;
+  /** @type {Map<string, string>} domain -> chat project id */
+  const domainProjects = new Map();
+  const createdProjects = new Set();
+  const fallbackDomain = getEmailDomain(targetUser.email);
 
   // Process in batches
   for (let i = 0; i < conversations.length; i += BATCH_SIZE) {
@@ -362,8 +449,33 @@ async function importConversations(filePath, targetUserId) {
       // Build conversation document (without embedded messages)
       const convoDoc = { ...convo };
       delete convoDoc.messages;
+      // Export-only metadata; never persisted on the conversation itself.
+      delete convoDoc.ownerEmail;
       convoDoc.user = targetUserId;
       delete convoDoc.expiredAt;
+
+      // Group the conversation under a project named after the original
+      // owner's email domain, falling back to the target user's domain.
+      if (groupByDomain) {
+        const domain = getEmailDomain(getOwnerEmail(convo)) || fallbackDomain;
+        if (domain) {
+          let projectId = domainProjects.get(domain);
+          if (projectId === undefined) {
+            const project = await getOrCreateDomainProject(domain, targetUserId);
+            projectId = project.projectId;
+            domainProjects.set(domain, projectId);
+            if (project.created) {
+              createdProjects.add(domain);
+            }
+            console.gray(
+              `  ${project.created ? 'Created' : 'Using'} project "${domain}" (${projectId})`,
+            );
+          }
+          convoDoc.chatProjectId = projectId;
+        } else {
+          unassignedConvos++;
+        }
+      }
 
       batchConvos.push(convoDoc);
 
@@ -436,7 +548,35 @@ async function importConversations(filePath, targetUserId) {
     }
   }
 
+  // Refresh conversation counts / recency stats on every touched project.
+  if (domainProjects.size > 0) {
+    console.gray('  Refreshing project statistics...');
+    for (const [domain, projectId] of domainProjects) {
+      try {
+        await refreshChatProjectStats(targetUserId, projectId);
+      } catch (err) {
+        console.yellow(
+          `  Warning: could not refresh stats for project "${domain}": ${err.message}`,
+        );
+      }
+    }
+  }
+
   console.green(`Import complete: ${totalConvos} conversations, ${totalMessages} messages.`);
+
+  if (groupByDomain) {
+    if (domainProjects.size > 0) {
+      const summary = [...domainProjects.keys()]
+        .map((domain) => (createdProjects.has(domain) ? `${domain} (new)` : domain))
+        .join(', ');
+      console.green(`Grouped into ${domainProjects.size} project(s) by email domain: ${summary}`);
+    }
+    if (unassignedConvos > 0) {
+      console.yellow(
+        `${unassignedConvos} conversation(s) had no resolvable email domain and were left unassigned.`,
+      );
+    }
+  }
 }
 
 async function gracefulExit(code = 0) {
@@ -511,7 +651,7 @@ async function gracefulExit(code = 0) {
   } else {
     console.purple('Bulk Import Conversations');
     console.purple('---------------');
-    await importConversations(args.file, userId);
+    await importConversations(args.file, userId, { groupByDomain: !args['no-projects'] });
   }
 
   return gracefulExit(0);
