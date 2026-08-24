@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useMemo } from 'react';
-import { useAddedChatContext } from './AddedChatContext';
 import { useChatContext } from './ChatContext';
 
 interface MessagesViewContextValue {
@@ -9,7 +8,6 @@ interface MessagesViewContextValue {
 
   /** Submission and control states */
   isSubmitting: ReturnType<typeof useChatContext>['isSubmitting'];
-  isSubmittingFamily: boolean;
   abortScroll: ReturnType<typeof useChatContext>['abortScroll'];
   setAbortScroll: ReturnType<typeof useChatContext>['setAbortScroll'];
 
@@ -20,34 +18,35 @@ interface MessagesViewContextValue {
 
   /** Message state management */
   index: ReturnType<typeof useChatContext>['index'];
-  latestMessage: ReturnType<typeof useChatContext>['latestMessage'];
-  setLatestMessage: ReturnType<typeof useChatContext>['setLatestMessage'];
+  latestMessageId: ReturnType<typeof useChatContext>['latestMessageId'];
+  latestMessageDepth: ReturnType<typeof useChatContext>['latestMessageDepth'];
   getMessages: ReturnType<typeof useChatContext>['getMessages'];
   setMessages: ReturnType<typeof useChatContext>['setMessages'];
 }
 
 const MessagesViewContext = createContext<MessagesViewContextValue | undefined>(undefined);
 
+// Export the context so it can be provided by other providers (e.g., ShareMessagesProvider)
+export { MessagesViewContext };
+export type { MessagesViewContextValue };
+
 export function MessagesViewProvider({ children }: { children: React.ReactNode }) {
   const chatContext = useChatContext();
-  const addedChatContext = useAddedChatContext();
 
   const {
     ask,
     index,
     regenerate,
-    isSubmitting: isSubmittingRoot,
+    isSubmitting,
     conversation,
-    latestMessage,
+    latestMessageId,
+    latestMessageDepth,
     setAbortScroll,
     handleContinue,
-    setLatestMessage,
     abortScroll,
     getMessages,
     setMessages,
   } = chatContext;
-
-  const { isSubmitting: isSubmittingAdditional } = addedChatContext;
 
   /** Memoize conversation-related values */
   const conversationValues = useMemo(
@@ -61,12 +60,11 @@ export function MessagesViewProvider({ children }: { children: React.ReactNode }
   /** Memoize submission states */
   const submissionStates = useMemo(
     () => ({
-      isSubmitting: isSubmittingRoot,
-      isSubmittingFamily: isSubmittingRoot || isSubmittingAdditional,
       abortScroll,
+      isSubmitting,
       setAbortScroll,
     }),
-    [isSubmittingRoot, isSubmittingAdditional, abortScroll, setAbortScroll],
+    [isSubmitting, abortScroll, setAbortScroll],
   );
 
   /** Memoize message operations (these are typically stable references) */
@@ -85,10 +83,10 @@ export function MessagesViewProvider({ children }: { children: React.ReactNode }
   const messageState = useMemo(
     () => ({
       index,
-      latestMessage,
-      setLatestMessage,
+      latestMessageId,
+      latestMessageDepth,
     }),
-    [index, latestMessage, setLatestMessage],
+    [index, latestMessageId, latestMessageDepth],
   );
 
   /** Combine all values into final context value */
@@ -123,11 +121,10 @@ export function useMessagesConversation() {
 
 /** Hook for components that only need submission states */
 export function useMessagesSubmission() {
-  const { isSubmitting, isSubmittingFamily, abortScroll, setAbortScroll } =
-    useMessagesViewContext();
+  const { isSubmitting, abortScroll, setAbortScroll } = useMessagesViewContext();
   return useMemo(
-    () => ({ isSubmitting, isSubmittingFamily, abortScroll, setAbortScroll }),
-    [isSubmitting, isSubmittingFamily, abortScroll, setAbortScroll],
+    () => ({ isSubmitting, abortScroll, setAbortScroll }),
+    [isSubmitting, abortScroll, setAbortScroll],
   );
 }
 
@@ -140,11 +137,60 @@ export function useMessagesOperations() {
   );
 }
 
+type OptionalMessagesOps = Pick<
+  MessagesViewContextValue,
+  'ask' | 'regenerate' | 'handleContinue' | 'getMessages' | 'setMessages'
+>;
+
+const NOOP_OPS: OptionalMessagesOps = {
+  ask: () => {},
+  regenerate: () => {},
+  handleContinue: () => {},
+  getMessages: () => undefined,
+  setMessages: () => {},
+};
+
+/**
+ * Hook for components that need message operations but may render outside MessagesViewProvider
+ * (e.g. the /search route). Returns no-op stubs when the provider is absent — UI actions will
+ * be silently discarded rather than crashing. Callers must use optional chaining on
+ * `getMessages()` results, as it returns `undefined` outside the provider.
+ */
+export function useOptionalMessagesOperations(): OptionalMessagesOps {
+  const context = useContext(MessagesViewContext);
+  const ask = context?.ask;
+  const regenerate = context?.regenerate;
+  const handleContinue = context?.handleContinue;
+  const getMessages = context?.getMessages;
+  const setMessages = context?.setMessages;
+  return useMemo(
+    () => ({
+      ask: ask ?? NOOP_OPS.ask,
+      regenerate: regenerate ?? NOOP_OPS.regenerate,
+      handleContinue: handleContinue ?? NOOP_OPS.handleContinue,
+      getMessages: getMessages ?? NOOP_OPS.getMessages,
+      setMessages: setMessages ?? NOOP_OPS.setMessages,
+    }),
+    [ask, regenerate, handleContinue, getMessages, setMessages],
+  );
+}
+
+/**
+ * Hook for components that need conversation data but may render outside MessagesViewProvider
+ * (e.g. the /search route). Returns `undefined` for both fields when the provider is absent.
+ */
+export function useOptionalMessagesConversation() {
+  const context = useContext(MessagesViewContext);
+  const conversation = context?.conversation;
+  const conversationId = context?.conversationId;
+  return useMemo(() => ({ conversation, conversationId }), [conversation, conversationId]);
+}
+
 /** Hook for components that only need message state */
 export function useMessagesState() {
-  const { index, latestMessage, setLatestMessage } = useMessagesViewContext();
+  const { index, latestMessageId, latestMessageDepth } = useMessagesViewContext();
   return useMemo(
-    () => ({ index, latestMessage, setLatestMessage }),
-    [index, latestMessage, setLatestMessage],
+    () => ({ index, latestMessageId, latestMessageDepth }),
+    [index, latestMessageId, latestMessageDepth],
   );
 }

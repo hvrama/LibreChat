@@ -1,6 +1,11 @@
 const axios = require('axios');
 const { logger } = require('@librechat/data-schemas');
-const { genAzureEndpoint } = require('@librechat/api');
+const {
+  genAzureEndpoint,
+  logAxiosError,
+  applyAxiosProxyConfig,
+  resolveConfigSecret,
+} = require('@librechat/api');
 const { extractEnvVariable, TTSProviders } = require('librechat-data-provider');
 const { getRandomVoiceId, createChunkProcessor, splitTextIntoChunks } = require('./streamAudio');
 const { getAppConfig } = require('~/server/services/Config');
@@ -120,9 +125,10 @@ class TTSService {
       backend: ttsSchema?.backend,
     };
 
+    const apiKey = resolveConfigSecret(ttsSchema?.apiKey) || '';
     const headers = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${extractEnvVariable(ttsSchema?.apiKey)}`,
+      ...(apiKey && { Authorization: `Bearer ${apiKey}` }),
     };
 
     return [url, data, headers];
@@ -159,7 +165,7 @@ class TTSService {
 
     const headers = {
       'Content-Type': 'application/json',
-      'api-key': ttsSchema.apiKey ? extractEnvVariable(ttsSchema.apiKey) : '',
+      'api-key': ttsSchema.apiKey ? resolveConfigSecret(ttsSchema.apiKey) || '' : '',
     };
 
     return [url, data, headers];
@@ -195,9 +201,10 @@ class TTSService {
       pronunciation_dictionary_locators: ttsSchema?.pronunciation_dictionary_locators,
     };
 
+    const apiKey = resolveConfigSecret(ttsSchema?.apiKey) || '';
     const headers = {
       'Content-Type': 'application/json',
-      'xi-api-key': extractEnvVariable(ttsSchema?.apiKey),
+      ...(apiKey && { 'xi-api-key': apiKey }),
       Accept: 'audio/mpeg',
     };
 
@@ -230,14 +237,11 @@ class TTSService {
       backend: ttsSchema?.backend,
     };
 
+    const apiKey = resolveConfigSecret(ttsSchema?.apiKey) || '';
     const headers = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${extractEnvVariable(ttsSchema?.apiKey)}`,
+      ...(apiKey && { Authorization: `Bearer ${apiKey}` }),
     };
-
-    if (extractEnvVariable(ttsSchema.apiKey) === '') {
-      delete headers.Authorization;
-    }
 
     return [url, data, headers];
   }
@@ -266,10 +270,12 @@ class TTSService {
 
     const options = { headers, responseType: stream ? 'stream' : 'arraybuffer' };
 
+    applyAxiosProxyConfig(options, url);
+
     try {
       return await axios.post(url, data, options);
     } catch (error) {
-      logger.error(`TTS request failed for provider ${provider}:`, error);
+      logAxiosError({ message: `TTS request failed for provider ${provider}:`, error });
       throw error;
     }
   }
@@ -292,6 +298,8 @@ class TTSService {
       req.config ??
       (await getAppConfig({
         role: req.user?.role,
+        userId: req.user?.id,
+        tenantId: req.user?.tenantId,
       }));
     try {
       res.setHeader('Content-Type', 'audio/mpeg');
@@ -325,7 +333,10 @@ class TTSService {
             break;
           }
         } catch (innerError) {
-          logger.error('Error processing manual update:', chunk, innerError);
+          logAxiosError({
+            message: `[TTS] Error processing manual update for chunk: ${chunk?.text?.substring(0, 50)}...`,
+            error: innerError,
+          });
           if (!res.headersSent) {
             return res.status(500).end();
           }
@@ -337,7 +348,7 @@ class TTSService {
         res.end();
       }
     } catch (error) {
-      logger.error('Error creating the audio stream:', error);
+      logAxiosError({ message: '[TTS] Error creating the audio stream:', error });
       if (!res.headersSent) {
         return res.status(500).send('An error occurred');
       }
@@ -357,6 +368,8 @@ class TTSService {
       req.config ??
       (await getAppConfig({
         role: req.user?.role,
+        userId: req.user?.id,
+        tenantId: req.user?.tenantId,
       }));
     const provider = this.getProvider(appConfig);
     const ttsSchema = appConfig?.speech?.tts?.[provider];
@@ -407,7 +420,10 @@ class TTSService {
               break;
             }
           } catch (innerError) {
-            logger.error('Error processing audio stream update:', update, innerError);
+            logAxiosError({
+              message: `[TTS] Error processing audio stream update: ${update?.text?.substring(0, 50)}...`,
+              error: innerError,
+            });
             if (!res.headersSent) {
               return res.status(500).end();
             }
@@ -424,7 +440,7 @@ class TTSService {
         res.end();
       }
     } catch (error) {
-      logger.error('Failed to fetch audio:', error);
+      logAxiosError({ message: '[TTS] Failed to fetch audio:', error });
       if (!res.headersSent) {
         res.status(500).end();
       }
@@ -480,4 +496,5 @@ module.exports = {
   textToSpeech,
   streamAudio,
   getProvider,
+  TTSService,
 };

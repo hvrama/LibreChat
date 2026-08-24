@@ -1,10 +1,10 @@
-import reactRouter from 'react-router-dom';
+import * as reactRouter from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
-import { render, waitFor, screen } from 'test/layout-test-utils';
 import * as mockDataProvider from 'librechat-data-provider/react-query';
 import type { TStartupConfig } from 'librechat-data-provider';
-import * as miscDataProvider from '~/data-provider/Misc/queries';
 import * as endpointQueries from '~/data-provider/Endpoints/queries';
+import { render, waitFor, screen } from 'test/layout-test-utils';
+import * as miscDataProvider from '~/data-provider/Misc/queries';
 import * as authMutations from '~/data-provider/Auth/mutations';
 import * as authQueries from '~/data-provider/Auth/queries';
 import Registration from '~/components/Auth/Registration';
@@ -83,7 +83,7 @@ const setup = ({
   const mockUseOutletContext = jest.spyOn(reactRouter, 'useOutletContext').mockReturnValue({
     startupConfig: useGetStartupConfigReturnValue.data,
   });
-  const mockUseGetBannerQuery = jest
+  jest
     .spyOn(miscDataProvider, 'useGetBannerQuery')
     //@ts-ignore - we don't need all parameters of the QueryObserverSuccessResult
     .mockReturnValue(useGetBannerQueryReturnValue);
@@ -112,6 +112,7 @@ const setup = ({
 
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
+  __esModule: true,
   useOutletContext: () => ({
     startupConfig: mockStartupConfig,
   }),
@@ -156,7 +157,6 @@ test('renders registration form', () => {
   );
 });
 
-// eslint-disable-next-line jest/no-commented-out-tests
 // test('calls registerUser.mutate on registration', async () => {
 //   const mutate = jest.fn();
 //   const { getByTestId, getByRole, history } = setup({
@@ -191,12 +191,16 @@ test('shows validation error messages', async () => {
   await userEvent.type(getByTestId('password'), 'pass');
   await userEvent.type(getByTestId('confirm_password'), 'password1');
   const alerts = getAllByRole('alert');
-  expect(alerts).toHaveLength(5);
-  expect(alerts[0]).toHaveTextContent(/Name must be at least 3 characters/i);
-  expect(alerts[1]).toHaveTextContent(/Username must be at least 2 characters/i);
-  expect(alerts[2]).toHaveTextContent(/You must enter a valid email address/i);
-  expect(alerts[3]).toHaveTextContent(/Password must be at least 8 characters/i);
-  expect(alerts[4]).toHaveTextContent(/Passwords do not match/i);
+  expect(alerts).toHaveLength(6);
+
+  // This first alert is for the theme toggle, which is empty within this test but still picked up by getAllByRole as an alert
+  expect(alerts[0]).toHaveTextContent('');
+
+  expect(alerts[1]).toHaveTextContent(/Name must be at least 3 characters/i);
+  expect(alerts[2]).toHaveTextContent(/Username must be at least 2 characters/i);
+  expect(alerts[3]).toHaveTextContent(/You must enter a valid email address/i);
+  expect(alerts[4]).toHaveTextContent(/Password must be at least 8 characters/i);
+  expect(alerts[5]).toHaveTextContent(/Passwords do not match/i);
 });
 
 test('shows error message when registration fails', async () => {

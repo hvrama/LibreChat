@@ -1,14 +1,12 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { RecoilRoot } from 'recoil';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { RecoilRoot } from 'recoil';
-
-import type t from 'librechat-data-provider';
+import { render, screen, waitFor } from '@testing-library/react';
 import { Constants, EModelEndpoint } from 'librechat-data-provider';
-
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type t from 'librechat-data-provider';
 import AgentDetail from '../AgentDetail';
 
 // Mock dependencies
@@ -21,6 +19,23 @@ jest.mock('~/hooks', () => ({
   useMediaQuery: jest.fn(() => false), // Mock as desktop by default
   useLocalize: jest.fn(),
   useDefaultConvo: jest.fn(),
+  useFavorites: jest.fn(() => ({
+    favorites: [],
+    isFavoriteAgent: jest.fn(() => false),
+    toggleFavoriteAgent: jest.fn(),
+    isFavoriteModel: jest.fn(() => false),
+    toggleFavoriteModel: jest.fn(),
+    addFavoriteAgent: jest.fn(),
+    removeFavoriteAgent: jest.fn(),
+    addFavoriteModel: jest.fn(),
+    removeFavoriteModel: jest.fn(),
+    reorderFavorites: jest.fn(),
+    isLoading: false,
+    isError: false,
+    isUpdating: false,
+    fetchError: null,
+    updateError: null,
+  })),
 }));
 
 jest.mock('@librechat/client', () => ({
@@ -131,6 +146,7 @@ describe('AgentDetail', () => {
     (useQueryClient as jest.Mock).mockReturnValue({
       getQueryData: jest.fn(),
       setQueryData: jest.fn(),
+      removeQueries: jest.fn(),
       invalidateQueries: jest.fn(),
     });
 
@@ -215,6 +231,7 @@ describe('AgentDetail', () => {
       const mockQueryClient = {
         getQueryData: jest.fn().mockReturnValue(null),
         setQueryData: jest.fn(),
+        removeQueries: jest.fn(),
         invalidateQueries: jest.fn(),
       };
 
@@ -342,7 +359,7 @@ describe('AgentDetail', () => {
       renderWithProviders(<AgentDetail {...defaultProps} />);
 
       const copyLinkButton = screen.getByRole('button', { name: 'com_agents_copy_link' });
-      expect(copyLinkButton).toHaveClass('focus:outline-none', 'focus:ring-2');
+      expect(copyLinkButton).toHaveClass('focus-visible:outline-none', 'focus-visible:ring-2');
     });
   });
 

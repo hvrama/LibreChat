@@ -1,13 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
+import { useRecoilValue } from 'recoil';
 import { Outlet } from 'react-router-dom';
-import type { ContextType } from '~/common';
-import {
-  useSearchEnabled,
-  useAssistantsMap,
-  useAuthContext,
-  useAgentsMap,
-  useFileMap,
-} from '~/hooks';
+import { useMediaQuery } from '@librechat/client';
 import {
   PromptGroupsProvider,
   AssistantsMapContext,
@@ -15,23 +9,42 @@ import {
   SetConvoProvider,
   FileMapContext,
 } from '~/Providers';
+import {
+  useSearchEnabled,
+  useAssistantsMap,
+  useAuthContext,
+  useAgentsMap,
+  useFileMap,
+} from '~/hooks';
+import KeyboardShortcutsDialog from '~/components/Nav/KeyboardShortcutsDialog';
+import KeyboardDeleteDialog from '~/components/Nav/KeyboardDeleteDialog';
 import { useUserTermsQuery, useGetStartupConfig } from '~/data-provider';
+import useKeyboardShortcuts from '~/hooks/useKeyboardShortcuts';
+import { UnifiedSidebar } from '~/components/UnifiedSidebar';
 import { TermsAndConditionsModal } from '~/components/ui';
-import { Nav, MobileNav } from '~/components/Nav';
 import { useHealthCheck } from '~/data-provider';
 import { Banner } from '~/components/Banners';
+import store from '~/store';
+
+/** Isolates keyboard shortcut listeners so they only mount after auth. */
+function KeyboardShortcutsProvider() {
+  useKeyboardShortcuts();
+  return (
+    <>
+      <KeyboardShortcutsDialog />
+      <KeyboardDeleteDialog />
+    </>
+  );
+}
 
 export default function Root() {
   const [showTerms, setShowTerms] = useState(false);
   const [bannerHeight, setBannerHeight] = useState(0);
-  const [navVisible, setNavVisible] = useState(() => {
-    const savedNavVisible = localStorage.getItem('navVisible');
-    return savedNavVisible !== null ? JSON.parse(savedNavVisible) : true;
-  });
+  const sidebarExpanded = useRecoilValue(store.sidebarExpanded);
+  const isSmallScreen = useMediaQuery('(max-width: 768px)');
 
   const { isAuthenticated, logout } = useAuthContext();
 
-  // Global health check - runs once per authenticated session
   useHealthCheck(isAuthenticated);
 
   const assistantsMap = useAssistantsMap({ isAuthenticated });
@@ -73,10 +86,17 @@ export default function Root() {
               <Banner onHeightChange={setBannerHeight} />
               <div className="flex" style={{ height: `calc(100dvh - ${bannerHeight}px)` }}>
                 <div className="relative z-0 flex h-full w-full overflow-hidden">
-                  <Nav navVisible={navVisible} setNavVisible={setNavVisible} />
-                  <div className="relative flex h-full max-w-full flex-1 flex-col overflow-hidden">
-                    <MobileNav setNavVisible={setNavVisible} />
-                    <Outlet context={{ navVisible, setNavVisible } satisfies ContextType} />
+                  <UnifiedSidebar />
+                  <div
+                    className="relative flex h-full max-w-full flex-1 flex-col overflow-hidden"
+                    style={{
+                      transform:
+                        isSmallScreen && sidebarExpanded ? 'translateX(min(85vw, 380px))' : 'none',
+                      transition: 'transform 300ms cubic-bezier(0.2, 0, 0, 1)',
+                    }}
+                    inert={isSmallScreen && sidebarExpanded ? '' : undefined}
+                  >
+                    <Outlet />
                   </div>
                 </div>
               </div>
@@ -92,6 +112,7 @@ export default function Root() {
               modalContent={config.interface.termsOfService.modalContent}
             />
           )}
+          <KeyboardShortcutsProvider />
         </AssistantsMapContext.Provider>
       </FileMapContext.Provider>
     </SetConvoProvider>

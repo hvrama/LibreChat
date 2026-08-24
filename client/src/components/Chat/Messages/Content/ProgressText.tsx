@@ -1,23 +1,23 @@
+import { ChevronDown } from 'lucide-react';
 import * as Popover from '@radix-ui/react-popover';
-import { Spinner } from '@librechat/client';
-import { ChevronDown, ChevronUp } from 'lucide-react';
 import CancelledIcon from './CancelledIcon';
-import FinishedIcon from './FinishedIcon';
 import { cn } from '~/utils';
 
 const wrapperClass =
   'progress-text-wrapper text-token-text-secondary relative -mt-[0.75px] h-5 w-full leading-5';
+
+/** `max-w-full` caps the absolutely-positioned line at the message column;
+ *  the label span truncates itself, so overflow stays visible for the
+ *  button's focus ring. */
+const contentClass =
+  'progress-text-content absolute left-0 top-0 max-w-full overflow-visible whitespace-nowrap';
 
 const Wrapper = ({ popover, children }: { popover: boolean; children: React.ReactNode }) => {
   if (popover) {
     return (
       <div className={wrapperClass}>
         <Popover.Trigger asChild>
-          <div
-            className="progress-text-content absolute left-0 top-0 overflow-visible whitespace-nowrap"
-            style={{ opacity: 1, transform: 'none' }}
-            data-projection-id="78"
-          >
+          <div className={contentClass} style={{ opacity: 1, transform: 'none' }}>
             {children}
           </div>
         </Popover.Trigger>
@@ -27,11 +27,7 @@ const Wrapper = ({ popover, children }: { popover: boolean; children: React.Reac
 
   return (
     <div className={wrapperClass}>
-      <div
-        className="progress-text-content absolute left-0 top-0 overflow-visible whitespace-nowrap"
-        style={{ opacity: 1, transform: 'none' }}
-        data-projection-id="78"
-      >
+      <div className={contentClass} style={{ opacity: 1, transform: 'none' }}>
         {children}
       </div>
     </div>
@@ -44,6 +40,9 @@ export default function ProgressText({
   inProgressText,
   finishedText,
   authText,
+  icon: iconProp,
+  subtitle,
+  errorSuffix,
   hasInput = true,
   popover = false,
   isExpanded = false,
@@ -54,6 +53,9 @@ export default function ProgressText({
   inProgressText: string;
   finishedText: string;
   authText?: string;
+  icon?: React.ReactNode;
+  subtitle?: string;
+  errorSuffix?: string;
   hasInput?: boolean;
   popover?: boolean;
   isExpanded?: boolean;
@@ -70,13 +72,10 @@ export default function ProgressText({
   };
 
   const getIcon = () => {
-    if (error) {
+    if (error && !errorSuffix) {
       return <CancelledIcon />;
     }
-    if (progress < 1) {
-      return <Spinner />;
-    }
-    return <FinishedIcon />;
+    return iconProp ?? null;
   };
 
   const text = getText();
@@ -89,19 +88,32 @@ export default function ProgressText({
         type="button"
         className={cn(
           'inline-flex w-full items-center gap-2',
-          hasInput ? '' : 'pointer-events-none',
+          hasInput
+            ? 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy'
+            : 'pointer-events-none',
         )}
         disabled={!hasInput}
+        tabIndex={hasInput ? 0 : -1}
         onClick={hasInput ? onClick : undefined}
+        aria-expanded={hasInput ? isExpanded : undefined}
       >
         {icon}
-        <span className={showShimmer ? 'shimmer' : ''}>{text}</span>
-        {hasInput &&
-          (isExpanded ? (
-            <ChevronUp className="size-4 shrink-0 translate-y-[1px]" />
-          ) : (
-            <ChevronDown className="size-4 shrink-0 translate-y-[1px]" />
-          ))}
+        <span className={cn(showShimmer ? 'shimmer' : '', 'min-w-0 truncate font-medium')}>
+          {text}
+        </span>
+        {subtitle && <span className="font-normal text-text-secondary">{subtitle}</span>}
+        {errorSuffix && (
+          <span className="font-normal text-red-600 dark:text-red-400">· {errorSuffix}</span>
+        )}
+        {hasInput && (
+          <ChevronDown
+            className={cn(
+              'size-4 shrink-0 translate-y-[1px] transition-transform duration-200 ease-out',
+              isExpanded && 'rotate-180',
+            )}
+            aria-hidden="true"
+          />
+        )}
       </button>
     </Wrapper>
   );

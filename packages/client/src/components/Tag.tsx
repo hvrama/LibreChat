@@ -38,7 +38,7 @@ const TagPrimitiveRoot = React.forwardRef<HTMLDivElement, TagProps>(
               className="rounded-full bg-green-600/50"
               aria-label={`Remove ${label}`}
             >
-              <X className="m-[1.5px] p-1" />
+              <X className="m-[1.5px] p-1" aria-hidden="true" />
             </button>
           )}
     </div>
@@ -47,4 +47,14 @@ const TagPrimitiveRoot = React.forwardRef<HTMLDivElement, TagProps>(
 
 TagPrimitiveRoot.displayName = 'Tag';
 
-export const Tag = React.memo(TagPrimitiveRoot);
+export const Tag: React.MemoExoticComponent<
+  React.ForwardRefExoticComponent<
+    Omit<React.DetailedHTMLProps<React.HTMLAttributes<HTMLDivElement>, HTMLDivElement>, 'ref'> & {
+      label: string;
+      labelClassName?: string;
+      CancelButton?: React.ReactNode;
+      LabelNode?: React.ReactNode;
+      onRemove?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+    } & React.RefAttributes<HTMLDivElement>
+  >
+> = React.memo(TagPrimitiveRoot);

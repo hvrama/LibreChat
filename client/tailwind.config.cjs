@@ -47,6 +47,11 @@ module.exports = {
           '0%': { transform: 'translateX(0)' },
           '100%': { transform: 'translateX(100%)' },
         },
+        'shortcut-shake': {
+          '0%, 100%': { transform: 'translateX(0)' },
+          '25%': { transform: 'translateX(-3px)' },
+          '75%': { transform: 'translateX(3px)' },
+        },
       },
       animation: {
         'fade-in': 'fadeIn 0.5s ease-out forwards',
@@ -56,6 +61,7 @@ module.exports = {
         'slide-in-left': 'slide-in-left 300ms cubic-bezier(0.25, 0.1, 0.25, 1)',
         'slide-out-left': 'slide-out-left 300ms cubic-bezier(0.25, 0.1, 0.25, 1)',
         'slide-out-right': 'slide-out-right 300ms cubic-bezier(0.25, 0.1, 0.25, 1)',
+        'shortcut-shake': 'shortcut-shake 0.25s ease-in-out',
       },
       colors: {
         gray: {
@@ -92,6 +98,7 @@ module.exports = {
         'text-secondary-alt': 'var(--text-secondary-alt)',
         'text-tertiary': 'var(--text-tertiary)',
         'text-warning': 'var(--text-warning)',
+        'text-destructive': 'var(--text-destructive)',
         'ring-primary': 'var(--ring-primary)',
         'header-primary': 'var(--header-primary)',
         'header-hover': 'var(--header-hover)',
@@ -118,6 +125,7 @@ module.exports = {
         'border-medium-alt': 'var(--border-medium-alt)',
         'border-heavy': 'var(--border-heavy)',
         'border-xheavy': 'var(--border-xheavy)',
+        'border-destructive': 'var(--border-destructive)',
         /* These are test styles */
         border: 'hsl(var(--border))',
         input: 'hsl(var(--input))',

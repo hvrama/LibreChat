@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { dataService, MutationKeys, PermissionBits, QueryKeys } from 'librechat-data-provider';
-import type * as t from 'librechat-data-provider';
 import type { QueryClient, UseMutationResult } from '@tanstack/react-query';
+import type * as t from 'librechat-data-provider';
 
 /**
  * AGENTS
@@ -10,6 +10,26 @@ export const allAgentViewAndEditQueryKeys: t.AgentListParams[] = [
   { requiredPermission: PermissionBits.VIEW },
   { requiredPermission: PermissionBits.EDIT },
 ];
+
+const edgeEndpointIncludesAgent = (endpoint: string | string[], agentId: string): boolean =>
+  Array.isArray(endpoint) ? endpoint.includes(agentId) : endpoint === agentId;
+
+const hasEdgeWithAgent = (data: unknown, agentId: string): boolean => {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+
+  const { edges } = data as Partial<t.Agent>;
+  return (
+    Array.isArray(edges) &&
+    edges.some(
+      (edge) =>
+        edgeEndpointIncludesAgent(edge.from, agentId) ||
+        edgeEndpointIncludesAgent(edge.to, agentId),
+    )
+  );
+};
+
 /**
  * Create a new agent
  */
@@ -131,6 +151,15 @@ export const useDeleteAgentMutation = (
 
         queryClient.removeQueries([QueryKeys.agent, variables.agent_id]);
         queryClient.removeQueries([QueryKeys.agent, variables.agent_id, 'expanded']);
+        /** Deletion removes the agent from every edge endpoint server-side. Expanded queries
+         * opt out of refetch-on-mount, so refresh every cached graph known to reference it. */
+        queryClient.invalidateQueries({
+          queryKey: [QueryKeys.agent],
+          predicate: (query) =>
+            query.queryKey[2] === 'expanded' &&
+            hasEdgeWithAgent(query.state.data, variables.agent_id),
+          refetchType: 'all',
+        });
         invalidateAgentMarketplaceQueries(queryClient);
 
         return options?.onSuccess?.(_data, variables, data);
@@ -188,9 +217,41 @@ export const useUploadAgentAvatarMutation = (
   t.AgentAvatarVariables, // request
   unknown // context
 > => {
-  return useMutation([MutationKeys.agentAvatarUpload], {
+  const queryClient = useQueryClient();
+  return useMutation<t.Agent, unknown, t.AgentAvatarVariables>({
+    mutationKey: [MutationKeys.agentAvatarUpload],
     mutationFn: (variables: t.AgentAvatarVariables) => dataService.uploadAgentAvatar(variables),
-    ...(options || {}),
+    onMutate: (variables) => options?.onMutate?.(variables),
+    onError: (error, variables, context) => options?.onError?.(error, variables, context),
+    onSuccess: (updatedAgent, variables, context) => {
+      ((keys: t.AgentListParams[]) => {
+        keys.forEach((key) => {
+          const listRes = queryClient.getQueryData<t.AgentListResponse>([QueryKeys.agents, key]);
+          if (!listRes) {
+            return;
+          }
+
+          queryClient.setQueryData<t.AgentListResponse>([QueryKeys.agents, key], {
+            ...listRes,
+            data: listRes.data.map((agent) => {
+              if (agent.id === variables.agent_id) {
+                return updatedAgent;
+              }
+              return agent;
+            }),
+          });
+        });
+      })(allAgentViewAndEditQueryKeys);
+
+      queryClient.setQueryData<t.Agent>([QueryKeys.agent, variables.agent_id], updatedAgent);
+      queryClient.setQueryData<t.Agent>(
+        [QueryKeys.agent, variables.agent_id, 'expanded'],
+        updatedAgent,
+      );
+      invalidateAgentMarketplaceQueries(queryClient);
+
+      return options?.onSuccess?.(updatedAgent, variables, context);
+    },
   });
 };
 
@@ -346,6 +407,11 @@ export const useRevertAgentVersionMutation = (
       onError: (error, variables, context) => options?.onError?.(error, variables, context),
       onSuccess: (revertedAgent, variables, context) => {
         queryClient.setQueryData<t.Agent>([QueryKeys.agent, variables.agent_id], revertedAgent);
+        queryClient.setQueryData<t.Agent>(
+          [QueryKeys.agent, variables.agent_id, 'expanded'],
+          revertedAgent,
+        );
+        queryClient.invalidateQueries([QueryKeys.agent, variables.agent_id, 'versions']);
 
         ((keys: t.AgentListParams[]) => {
           keys.forEach((key) => {

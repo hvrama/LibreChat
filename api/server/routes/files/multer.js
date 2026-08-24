@@ -3,7 +3,12 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const { sanitizeFilename } = require('@librechat/api');
-const { fileConfig: defaultFileConfig, mergeFileConfig } = require('librechat-data-provider');
+const {
+  mergeFileConfig,
+  inferMimeType,
+  getEndpointFileConfig,
+  fileConfig: defaultFileConfig,
+} = require('librechat-data-provider');
 const { getAppConfig } = require('~/server/services/Config');
 
 const storage = multer.diskStorage({
@@ -33,6 +38,14 @@ const importFileFilter = (req, file, cb) => {
   }
 };
 
+const normalizeUploadMimeType = (file) => {
+  const mimeType = inferMimeType(file.originalname || '', file.mimetype || '');
+  if (mimeType && file.mimetype !== mimeType) {
+    file.mimetype = mimeType;
+  }
+  return mimeType;
+};
+
 /**
  *
  * @param {import('librechat-data-provider').FileConfig | undefined} customFileConfig
@@ -48,18 +61,22 @@ const createFileFilter = (customFileConfig) => {
       return cb(new Error('No file provided'), false);
     }
 
-    if (req.originalUrl.endsWith('/speech/stt') && file.mimetype.startsWith('audio/')) {
+    const mimeType = normalizeUploadMimeType(file);
+
+    if (req.originalUrl.endsWith('/speech/stt') && mimeType.startsWith('audio/')) {
       return cb(null, true);
     }
 
     const endpoint = req.body.endpoint;
-    const supportedTypes =
-      customFileConfig?.endpoints?.[endpoint]?.supportedMimeTypes ??
-      customFileConfig?.endpoints?.default.supportedMimeTypes ??
-      defaultFileConfig?.endpoints?.[endpoint]?.supportedMimeTypes;
+    const endpointType = req.body.endpointType;
+    const endpointFileConfig = getEndpointFileConfig({
+      fileConfig: customFileConfig,
+      endpoint,
+      endpointType,
+    });
 
-    if (!defaultFileConfig.checkType(file.mimetype, supportedTypes)) {
-      return cb(new Error('Unsupported file type: ' + file.mimetype), false);
+    if (!defaultFileConfig.checkType(mimeType, endpointFileConfig.supportedMimeTypes)) {
+      return cb(new Error('Unsupported file type: ' + (file.mimetype || mimeType)), false);
     }
 
     cb(null, true);
@@ -79,4 +96,4 @@ const createMulterInstance = async () => {
   });
 };
 
-module.exports = { createMulterInstance, storage, importFileFilter };
+module.exports = { createMulterInstance, storage, importFileFilter, createFileFilter };

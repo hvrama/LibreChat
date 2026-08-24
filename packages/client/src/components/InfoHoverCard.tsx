@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { JSX } from 'react/jsx-runtime';
 import { CircleHelpIcon } from 'lucide-react';
 import { HoverCard, HoverCardTrigger, HoverCardPortal, HoverCardContent } from './HoverCard';
 import { ESide } from '~/common';
@@ -8,7 +9,7 @@ type InfoHoverCardProps = {
   text: string;
 };
 
-const InfoHoverCard = ({ side, text }: InfoHoverCardProps) => {
+const InfoHoverCard = ({ side, text }: InfoHoverCardProps): JSX.Element => {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
@@ -24,7 +25,7 @@ const InfoHoverCard = ({ side, text }: InfoHoverCardProps) => {
       </HoverCardTrigger>
       <HoverCardPortal>
         <HoverCardContent side={side} className="z-[999] w-80">
-          <div className="space-y-2">
+          <div className="max-h-[80vh] space-y-2 overflow-y-auto">
             <span className="text-sm text-text-secondary">{text}</span>
           </div>
         </HoverCardContent>

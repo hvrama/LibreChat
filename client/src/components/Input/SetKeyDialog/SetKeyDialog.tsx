@@ -1,31 +1,31 @@
 import React, { useState } from 'react';
 import { useForm, FormProvider } from 'react-hook-form';
-import {
-  OGDialog,
-  OGDialogContent,
-  OGDialogHeader,
-  OGDialogTitle,
-  OGDialogFooter,
-  Dropdown,
-  useToastContext,
-  Button,
-  Label,
-  OGDialogTrigger,
-  Spinner,
-} from '@librechat/client';
 import { EModelEndpoint, alternateName, isAssistantsEndpoint } from 'librechat-data-provider';
 import {
-  useRevokeAllUserKeysMutation,
   useRevokeUserKeyMutation,
+  useRevokeAllUserKeysMutation,
 } from 'librechat-data-provider/react-query';
+import {
+  Label,
+  Button,
+  Spinner,
+  OGDialog,
+  Dropdown,
+  OGDialogTitle,
+  OGDialogHeader,
+  OGDialogFooter,
+  OGDialogContent,
+  useToastContext,
+  OGDialogTrigger,
+} from '@librechat/client';
 import type { TDialogProps } from '~/common';
-import { useGetEndpointsQuery } from '~/data-provider';
 import { useUserKey, useLocalize } from '~/hooks';
 import { NotificationSeverity } from '~/common';
 import CustomConfig from './CustomEndpoint';
 import GoogleConfig from './GoogleConfig';
 import OpenAIConfig from './OpenAIConfig';
 import OtherConfig from './OtherConfig';
+import BedrockConfig from './BedrockConfig';
 import HelpText from './HelpText';
 import { logger } from '~/utils';
 
@@ -34,9 +34,9 @@ const endpointComponents = {
   [EModelEndpoint.openAI]: OpenAIConfig,
   [EModelEndpoint.custom]: CustomConfig,
   [EModelEndpoint.azureOpenAI]: OpenAIConfig,
-  [EModelEndpoint.gptPlugins]: OpenAIConfig,
   [EModelEndpoint.assistants]: OpenAIConfig,
   [EModelEndpoint.azureAssistants]: OpenAIConfig,
+  [EModelEndpoint.bedrock]: BedrockConfig,
   default: OtherConfig,
 };
 
@@ -44,9 +44,9 @@ const formSet: Set<string> = new Set([
   EModelEndpoint.openAI,
   EModelEndpoint.custom,
   EModelEndpoint.azureOpenAI,
-  EModelEndpoint.gptPlugins,
   EModelEndpoint.assistants,
   EModelEndpoint.azureAssistants,
+  EModelEndpoint.bedrock,
 ]);
 
 const EXPIRY = {
@@ -153,10 +153,18 @@ const SetKeyDialog = ({
   endpoint,
   endpointType,
   userProvideURL,
+  userProvideAccessKeyId,
+  userProvideSecretAccessKey,
+  userProvideSessionToken,
+  userProvideBearerToken,
 }: Pick<TDialogProps, 'open' | 'onOpenChange'> & {
   endpoint: EModelEndpoint | string;
   endpointType?: EModelEndpoint;
   userProvideURL?: boolean | null;
+  userProvideAccessKeyId?: boolean;
+  userProvideSecretAccessKey?: boolean;
+  userProvideSessionToken?: boolean;
+  userProvideBearerToken?: boolean;
 }) => {
   const methods = useForm({
     defaultValues: {
@@ -166,6 +174,10 @@ const SetKeyDialog = ({
       azureOpenAIApiInstanceName: '',
       azureOpenAIApiDeploymentName: '',
       azureOpenAIApiVersion: '',
+      bedrockAccessKeyId: '',
+      bedrockSecretAccessKey: '',
+      bedrockSessionToken: '',
+      bedrockBearerToken: '',
       // TODO: allow endpoint definitions from user
       // name: '',
       // TODO: add custom endpoint models defined by user
@@ -174,13 +186,13 @@ const SetKeyDialog = ({
   });
 
   const [userKey, setUserKey] = useState('');
-  const { data: endpointsConfig } = useGetEndpointsQuery();
   const [expiresAtLabel, setExpiresAtLabel] = useState(EXPIRY.TWELVE_HOURS.label);
   const { getExpiry, saveUserKey } = useUserKey(endpoint);
   const { showToast } = useToastContext();
   const localize = useLocalize();
 
   const expirationOptions = Object.values(EXPIRY);
+  const configuredEndpoint = endpointType ?? endpoint;
 
   const handleExpirationChange = (label: string) => {
     setExpiresAtLabel(label);
@@ -216,18 +228,21 @@ const SetKeyDialog = ({
     if (formSet.has(endpoint) || formSet.has(endpointType ?? '')) {
       // TODO: handle other user provided options besides baseURL and apiKey
       methods.handleSubmit((data) => {
-        const isAzure = endpoint === EModelEndpoint.azureOpenAI;
+        const isAzure = configuredEndpoint === EModelEndpoint.azureOpenAI;
+        const isBedrock = configuredEndpoint === EModelEndpoint.bedrock;
         const isOpenAIBase =
           isAzure ||
-          endpoint === EModelEndpoint.openAI ||
-          endpoint === EModelEndpoint.gptPlugins ||
-          isAssistantsEndpoint(endpoint);
+          configuredEndpoint === EModelEndpoint.openAI ||
+          isAssistantsEndpoint(configuredEndpoint);
         if (isAzure) {
           data.apiKey = 'n/a';
         }
 
         const emptyValues = Object.keys(data).filter((key) => {
           if (!isAzure && key.startsWith('azure')) {
+            return false;
+          }
+          if (!isBedrock && key.startsWith('bedrock')) {
             return false;
           }
           if (isOpenAIBase && key === 'baseURL') {
@@ -239,16 +254,68 @@ const SetKeyDialog = ({
           return data[key] === '';
         });
 
-        if (emptyValues.length > 0) {
+        if (isBedrock) {
+          const bearerToken = userProvideBearerToken ? data.bedrockBearerToken?.trim() : '';
+          const accessKeyId = userProvideAccessKeyId ? data.bedrockAccessKeyId?.trim() : '';
+          const secretAccessKey = userProvideSecretAccessKey
+            ? data.bedrockSecretAccessKey?.trim()
+            : '';
+          const sessionToken = userProvideSessionToken ? data.bedrockSessionToken?.trim() : '';
+          const accessKeyIdLabel = localize('com_endpoint_config_bedrock_access_key_id');
+          const secretAccessKeyLabel = localize('com_endpoint_config_bedrock_secret_access_key');
+          const sessionTokenLabel = localize('com_endpoint_config_bedrock_session_token');
+          const bearerTokenLabel = localize('com_endpoint_config_bedrock_bearer_token');
+          const canSubmitBearerToken = !!bearerToken;
+          const hasUserProvidedAccessKeyAuth =
+            !!userProvideAccessKeyId || !!userProvideSecretAccessKey || !!userProvideSessionToken;
+          const missingFields = [
+            !canSubmitBearerToken && !hasUserProvidedAccessKeyAuth && userProvideBearerToken
+              ? bearerTokenLabel
+              : '',
+            !canSubmitBearerToken && userProvideAccessKeyId && !accessKeyId ? accessKeyIdLabel : '',
+            !canSubmitBearerToken && userProvideSecretAccessKey && !secretAccessKey
+              ? secretAccessKeyLabel
+              : '',
+            !canSubmitBearerToken && userProvideSessionToken && !sessionToken
+              ? sessionTokenLabel
+              : '',
+          ].filter(Boolean);
+
+          if (!canSubmitBearerToken && missingFields.length > 0) {
+            showToast({
+              message: `${localize('com_endpoint_config_required_fields')} ${missingFields.join(', ')}`,
+              status: NotificationSeverity.ERROR,
+            });
+            onOpenChange(true);
+            return;
+          }
+
+          if (!canSubmitBearerToken && !hasUserProvidedAccessKeyAuth) {
+            showToast({
+              message: localize('com_endpoint_config_bedrock_credentials_required'),
+              status: NotificationSeverity.ERROR,
+            });
+            onOpenChange(true);
+            return;
+          }
+        } else if (emptyValues.length > 0) {
           showToast({
-            message: 'The following fields are required: ' + emptyValues.join(', '),
-            status: 'error',
+            message: `${localize('com_endpoint_config_required_fields')} ${emptyValues.join(', ')}`,
+            status: NotificationSeverity.ERROR,
           });
           onOpenChange(true);
           return;
         }
 
-        const { apiKey, baseURL, ...azureOptions } = data;
+        const {
+          apiKey,
+          baseURL,
+          bedrockAccessKeyId,
+          bedrockSecretAccessKey,
+          bedrockSessionToken,
+          bedrockBearerToken,
+          ...azureOptions
+        } = data;
         const userProvidedData = { apiKey, baseURL };
         if (isAzure) {
           userProvidedData.apiKey = JSON.stringify({
@@ -257,6 +324,23 @@ const SetKeyDialog = ({
             azureOpenAIApiDeploymentName: azureOptions.azureOpenAIApiDeploymentName,
             azureOpenAIApiVersion: azureOptions.azureOpenAIApiVersion,
           });
+        } else if (isBedrock) {
+          const bearerToken = userProvideBearerToken ? bedrockBearerToken.trim() : '';
+          const accessKeyId = userProvideAccessKeyId ? bedrockAccessKeyId.trim() : '';
+          const secretAccessKey = userProvideSecretAccessKey ? bedrockSecretAccessKey.trim() : '';
+          const sessionToken = userProvideSessionToken ? bedrockSessionToken.trim() : '';
+
+          if (bearerToken) {
+            userProvidedData.apiKey = JSON.stringify({
+              bearerToken,
+            });
+          } else {
+            userProvidedData.apiKey = JSON.stringify({
+              ...(accessKeyId && { accessKeyId }),
+              ...(secretAccessKey && { secretAccessKey }),
+              ...(sessionToken && { sessionToken }),
+            });
+          }
         }
 
         saveKey(JSON.stringify(userProvidedData));
@@ -277,10 +361,8 @@ const SetKeyDialog = ({
     setUserKey('');
   };
 
-  const EndpointComponent =
-    endpointComponents[endpointType ?? endpoint] ?? endpointComponents['default'];
+  const EndpointComponent = endpointComponents[configuredEndpoint] ?? endpointComponents['default'];
   const expiryTime = getExpiry();
-  const config = endpointsConfig?.[endpoint];
 
   return (
     <OGDialog open={open} onOpenChange={onOpenChange}>
@@ -310,13 +392,13 @@ const SetKeyDialog = ({
           <FormProvider {...methods}>
             <EndpointComponent
               userKey={userKey}
+              endpoint={endpoint}
               setUserKey={setUserKey}
-              endpoint={
-                endpoint === EModelEndpoint.gptPlugins && (config?.azure ?? false)
-                  ? EModelEndpoint.azureOpenAI
-                  : endpoint
-              }
               userProvideURL={userProvideURL}
+              userProvideAccessKeyId={userProvideAccessKeyId}
+              userProvideSecretAccessKey={userProvideSecretAccessKey}
+              userProvideSessionToken={userProvideSessionToken}
+              userProvideBearerToken={userProvideBearerToken}
             />
           </FormProvider>
           <HelpText endpoint={endpoint} />

@@ -5,20 +5,49 @@ import type { IMongoFile, AppConfig, IUser } from '@librechat/data-schemas';
 import type { FilterQuery, QueryOptions, ProjectionType } from 'mongoose';
 import type { Request as ServerRequest } from 'express';
 
+import { TOOL_RESOURCE_KEYS } from './orphans';
+
+/** Removes runtime-only file records before persisted Agent resources enter tool initialization. */
+const sanitizePersistedToolResources = (
+  tool_resources: AgentToolResources | undefined,
+): AgentToolResources => {
+  const sanitized: AgentToolResources = {};
+  for (const key of TOOL_RESOURCE_KEYS) {
+    const resource = tool_resources?.[key];
+    if (!resource) {
+      continue;
+    }
+    const persistedResource = { ...resource };
+    delete persistedResource.files;
+    sanitized[key] = persistedResource;
+  }
+  return sanitized;
+};
+
 /**
  * Function type for retrieving files from the database
  * @param filter - MongoDB filter query for files
  * @param _sortOptions - Sorting options (currently unused)
  * @param selectFields - Field selection options
- * @param options - Additional options including userId and agentId for access control
  * @returns Promise resolving to array of files
  */
 export type TGetFiles = (
   filter: FilterQuery<IMongoFile>,
   _sortOptions: ProjectionType<IMongoFile> | null | undefined,
   selectFields: QueryOptions<IMongoFile> | null | undefined,
-  options?: { userId?: string; agentId?: string },
 ) => Promise<Array<TFile>>;
+
+/**
+ * Function type for filtering files by agent access permissions.
+ * Used to enforce that only files the user has access to (via ownership or agent attachment)
+ * are returned after a raw DB query.
+ */
+export type TFilterFilesByAgentAccess = (params: {
+  files: Array<TFile>;
+  userId: string;
+  role?: string;
+  agentId: string;
+}) => Promise<Array<TFile>>;
 
 /**
  * Helper function to add a file to a specific tool resource category
@@ -70,7 +99,7 @@ const addFileToResource = ({
 /**
  * Categorizes a file into the appropriate tool resource based on its properties
  * Files are categorized as:
- * - execute_code: Files with fileIdentifier metadata
+ * - execute_code: Files with a code-environment ref (`codeEnvRef`)
  * - file_search: Files marked as embedded
  * - image_edit: Image files in the request file set with dimensions
  * @param params - Parameters object
@@ -90,7 +119,7 @@ const categorizeFileForToolResources = ({
   requestFileSet: Set<string>;
   processedResourceFiles: Set<string>;
 }): void => {
-  if (file.metadata?.fileIdentifier) {
+  if (file.metadata?.codeEnvRef) {
     addFileToResource({
       file,
       resourceType: EToolResources.execute_code,
@@ -128,7 +157,7 @@ const categorizeFileForToolResources = ({
 /**
  * Primes resources for agent execution by processing attachments and tool resources
  * This function:
- * 1. Fetches OCR files if OCR is enabled
+ * 1. Fetches context/OCR files (filtered by agent access control when available)
  * 2. Processes attachment files
  * 3. Categorizes files into appropriate tool resources
  * 4. Prevents duplicate files across all sources
@@ -137,31 +166,40 @@ const categorizeFileForToolResources = ({
  * @param params.req - Express request object
  * @param params.appConfig - Application configuration object
  * @param params.getFiles - Function to retrieve files from database
+ * @param params.filterFiles - Optional function to enforce agent-based file access control
  * @param params.requestFileSet - Set of file IDs from the current request
  * @param params.attachments - Promise resolving to array of attachment files
  * @param params.tool_resources - Existing tool resources for the agent
+ * @param params.agentId - Agent ID used for access control filtering
  * @returns Promise resolving to processed attachments and updated tool resources
  */
 export const primeResources = async ({
   req,
   appConfig,
   getFiles,
+  filterFiles,
   requestFileSet,
   attachments: _attachments,
   tool_resources: _tool_resources,
   agentId,
 }: {
   req: ServerRequest & { user?: IUser };
-  appConfig: AppConfig;
+  appConfig?: AppConfig;
   requestFileSet: Set<string>;
   attachments: Promise<Array<TFile | null>> | undefined;
   tool_resources: AgentToolResources | undefined;
   getFiles: TGetFiles;
+  filterFiles?: TFilterFilesByAgentAccess;
   agentId?: string;
 }): Promise<{
   attachments: Array<TFile | undefined> | undefined;
+  requestAttachments: Array<TFile | undefined> | undefined;
+  agentContextAttachments: Array<TFile | undefined> | undefined;
   tool_resources: AgentToolResources | undefined;
 }> => {
+  const requestAttachments: Array<TFile> = [];
+  const agentContextAttachments: Array<TFile> = [];
+  const persistedToolResources = sanitizePersistedToolResources(_tool_resources);
   try {
     /**
      * Array to collect all unique files that will be returned as attachments
@@ -184,7 +222,7 @@ export const primeResources = async ({
      * The agent's tool resources object that will be updated with categorized files
      * Create a shallow copy first to avoid mutating the original
      */
-    const tool_resources: AgentToolResources = { ...(_tool_resources ?? {}) };
+    const tool_resources: AgentToolResources = { ...persistedToolResources };
 
     // Deep copy each resource to avoid mutating nested objects/arrays
     for (const [resourceType, resource] of Object.entries(tool_resources)) {
@@ -226,27 +264,51 @@ export const primeResources = async ({
       delete tool_resources[EToolResources.ocr];
     }
 
-    if (fileIds.length > 0 && isContextEnabled) {
+    const shouldLoadContext = fileIds.length > 0 && isContextEnabled;
+    const contextFileIds = new Set(shouldLoadContext ? fileIds : []);
+    const imageEditFileIds = tool_resources[EToolResources.image_edit]?.file_ids ?? [];
+    const imageEditFileIdSet = new Set(imageEditFileIds);
+    const persistedResourceFileIds = new Set(contextFileIds);
+    for (const fileId of imageEditFileIds) {
+      persistedResourceFileIds.add(fileId);
+    }
+
+    if (shouldLoadContext) {
       delete tool_resources[EToolResources.context];
-      const context = await getFiles(
+    }
+
+    let persistedResourceFiles: Array<TFile> = [];
+    if (persistedResourceFileIds.size > 0) {
+      persistedResourceFiles = await getFiles(
         {
-          file_id: { $in: fileIds },
+          file_id: { $in: Array.from(persistedResourceFileIds) },
         },
         {},
         {},
-        { userId: req.user?.id, agentId },
       );
 
-      for (const file of context) {
-        if (!file?.file_id) {
-          continue;
-        }
+      if (filterFiles && req.user?.id && agentId) {
+        persistedResourceFiles = await filterFiles({
+          files: persistedResourceFiles,
+          userId: req.user.id,
+          role: req.user.role,
+          agentId,
+        });
+      }
+    }
 
+    for (const file of persistedResourceFiles) {
+      if (!file?.file_id) {
+        continue;
+      }
+
+      if (contextFileIds.has(file.file_id)) {
         // Clear from attachmentFileIds if it was pre-added
         attachmentFileIds.delete(file.file_id);
 
         // Add to attachments
         attachments.push(file);
+        agentContextAttachments.push(file);
         attachmentFileIds.add(file.file_id);
 
         // Categorize for tool resources
@@ -257,13 +319,30 @@ export const primeResources = async ({
           processedResourceFiles,
         });
       }
+
+      if (imageEditFileIdSet.has(file.file_id)) {
+        addFileToResource({
+          file,
+          resourceType: EToolResources.image_edit,
+          tool_resources,
+          processedResourceFiles,
+        });
+        attachmentFileIds.add(file.file_id);
+      }
     }
 
     if (!_attachments) {
-      return { attachments: attachments.length > 0 ? attachments : undefined, tool_resources };
+      return {
+        attachments: attachments.length > 0 ? attachments : undefined,
+        requestAttachments: undefined,
+        agentContextAttachments:
+          agentContextAttachments.length > 0 ? agentContextAttachments : undefined,
+        tool_resources,
+      };
     }
 
     const files = await _attachments;
+    const requestAttachmentFileIds = new Set<string>();
 
     for (const file of files) {
       if (!file) {
@@ -278,16 +357,30 @@ export const primeResources = async ({
       });
 
       if (file.file_id && attachmentFileIds.has(file.file_id)) {
+        if (!requestAttachmentFileIds.has(file.file_id)) {
+          requestAttachments.push(file);
+          requestAttachmentFileIds.add(file.file_id);
+        }
         continue;
       }
 
       attachments.push(file);
+      if (!file.file_id || !requestAttachmentFileIds.has(file.file_id)) {
+        requestAttachments.push(file);
+      }
       if (file.file_id) {
         attachmentFileIds.add(file.file_id);
+        requestAttachmentFileIds.add(file.file_id);
       }
     }
 
-    return { attachments: attachments.length > 0 ? attachments : [], tool_resources };
+    return {
+      attachments: attachments.length > 0 ? attachments : [],
+      requestAttachments,
+      agentContextAttachments:
+        agentContextAttachments.length > 0 ? agentContextAttachments : undefined,
+      tool_resources,
+    };
   } catch (error) {
     logger.error('Error priming resources', error);
 
@@ -306,7 +399,10 @@ export const primeResources = async ({
 
     return {
       attachments: safeAttachments,
-      tool_resources: _tool_resources,
+      requestAttachments: safeAttachments,
+      agentContextAttachments:
+        agentContextAttachments.length > 0 ? agentContextAttachments : undefined,
+      tool_resources: persistedToolResources,
     };
   }
 };

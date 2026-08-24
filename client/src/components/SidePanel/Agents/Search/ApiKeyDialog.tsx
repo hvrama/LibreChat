@@ -78,6 +78,20 @@ export default function ApiKeyDialog({
         },
       },
     },
+    {
+      key: SearchProviders.TAVILY,
+      label: localize('com_ui_web_search_provider_tavily'),
+      inputs: {
+        tavilyApiKey: {
+          placeholder: localize('com_ui_enter_api_key'),
+          type: 'password' as const,
+          link: {
+            url: 'https://app.tavily.com/home',
+            text: localize('com_ui_web_search_provider_tavily_key'),
+          },
+        },
+      },
+    },
   ];
 
   const rerankerOptions: DropdownOption[] = [
@@ -148,6 +162,20 @@ export default function ApiKeyDialog({
           link: {
             url: 'https://serper.dev/api-keys',
             text: localize('com_ui_web_search_scraper_serper_key'),
+          },
+        },
+      },
+    },
+    {
+      key: ScraperProviders.TAVILY,
+      label: localize('com_ui_web_search_scraper_tavily'),
+      inputs: {
+        tavilyApiKey: {
+          placeholder: localize('com_ui_enter_api_key'),
+          type: 'password' as const,
+          link: {
+            url: 'https://app.tavily.com/home',
+            text: localize('com_ui_web_search_scraper_tavily_key'),
           },
         },
       },
@@ -250,7 +278,11 @@ export default function ApiKeyDialog({
         }}
         buttons={
           isToolAuthenticated && (
-            <Button onClick={onRevoke} className="bg-red-500 text-white hover:bg-red-600">
+            <Button
+              onClick={onRevoke}
+              className="bg-red-500 text-white hover:bg-red-600"
+              aria-label={localize('com_ui_revoke')}
+            >
               {localize('com_ui_revoke')}
             </Button>
           )

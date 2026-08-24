@@ -1,15 +1,15 @@
 const fs = require('fs').promises;
 const { logger } = require('@librechat/data-schemas');
 const { FileContext } = require('librechat-data-provider');
+const { deleteFileByFilter, updateAssistantDoc, getAssistants } = require('~/models');
 const { uploadImageBuffer, filterFile } = require('~/server/services/Files/process');
 const validateAuthor = require('~/server/middleware/assistants/validateAuthor');
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { deleteAssistantActions } = require('~/server/services/ActionService');
-const { updateAssistantDoc, getAssistants } = require('~/models/Assistant');
 const { getOpenAIClient, fetchAssistants } = require('./helpers');
+const { healMcpToolNames } = require('~/server/services/MCP');
 const { getCachedTools } = require('~/server/services/Config');
-const { manifestToolMap } = require('~/app/clients/tools');
-const { deleteFileByFilter } = require('~/models/File');
+const { manifestToolMap, isAgentsOnlyTool } = require('~/app/clients/tools');
 
 /**
  * Create an assistant.
@@ -31,10 +31,20 @@ const createAssistant = async (req, res) => {
     delete assistantData.conversation_starters;
     delete assistantData.append_current_datetime;
 
-    const toolDefinitions = await getCachedTools();
+    const toolDefinitions = (await getCachedTools()) ?? {};
+    const healedTools = await healMcpToolNames({ req, tools, toolDefinitions });
 
-    assistantData.tools = tools
+    assistantData.tools = healedTools
       .map((tool) => {
+        /** Agents-runtime-only tools (e.g. ask_user_question) cannot execute on
+         *  the assistants runtime — drop them even when posted directly, since
+         *  the tools-dialog scoping doesn't gate REST clients or stale payloads. */
+        if (isAgentsOnlyTool(tool)) {
+          logger.warn(
+            `[/assistants] Dropping agents-only tool from assistant payload: ${typeof tool === 'string' ? tool : tool?.function?.name}`,
+          );
+          return undefined;
+        }
         if (typeof tool !== 'string') {
           return tool;
         }
@@ -136,10 +146,20 @@ const patchAssistant = async (req, res) => {
       ...updateData
     } = req.body;
 
-    const toolDefinitions = await getCachedTools();
+    const toolDefinitions = (await getCachedTools()) ?? {};
+    const healedTools = await healMcpToolNames({ req, tools: updateData.tools, toolDefinitions });
 
-    updateData.tools = (updateData.tools ?? [])
+    updateData.tools = healedTools
       .map((tool) => {
+        /** Agents-runtime-only tools (e.g. ask_user_question) cannot execute on
+         *  the assistants runtime — drop them even when posted directly, since
+         *  the tools-dialog scoping doesn't gate REST clients or stale payloads. */
+        if (isAgentsOnlyTool(tool)) {
+          logger.warn(
+            `[/assistants] Dropping agents-only tool from assistant payload: ${typeof tool === 'string' ? tool : tool?.function?.name}`,
+          );
+          return undefined;
+        }
         if (typeof tool !== 'string') {
           return tool;
         }
@@ -259,7 +279,7 @@ function filterAssistantDocs({ documents, userId, assistantsConfig = {} }) {
 const getAssistantDocuments = async (req, res) => {
   try {
     const appConfig = req.config;
-    const endpoint = req.query;
+    const endpoint = req.query?.endpoint;
     const assistantsConfig = appConfig.endpoints?.[endpoint];
     const documents = await getAssistants(
       {},
@@ -329,7 +349,11 @@ const uploadAssistantAvatar = async (req, res) => {
     if (_metadata.avatar && _metadata.avatar_source) {
       const { deleteFile } = getStrategyFunctions(_metadata.avatar_source);
       try {
-        await deleteFile(req, { filepath: _metadata.avatar });
+        await deleteFile(req, {
+          filepath: _metadata.avatar,
+          user: req.user.id,
+          tenantId: req.user.tenantId,
+        });
         await deleteFileByFilter({ user: req.user.id, filepath: _metadata.avatar });
       } catch (error) {
         logger.error('[/:assistant_id/avatar] Error deleting old avatar', error);

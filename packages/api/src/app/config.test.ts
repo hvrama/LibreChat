@@ -1,8 +1,8 @@
-import { getTransactionsConfig, getBalanceConfig } from './config';
-import { logger } from '@librechat/data-schemas';
-import { FileSources } from 'librechat-data-provider';
-import type { TCustomConfig } from 'librechat-data-provider';
+import { logger, encryptV3 } from '@librechat/data-schemas';
+import { FileSources, EModelEndpoint } from 'librechat-data-provider';
+import type { TCustomConfig, TEndpoint } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
+import { getTransactionsConfig, getBalanceConfig, getCustomEndpointConfig } from './config';
 
 // Helper function to create a minimal AppConfig for testing
 const createTestAppConfig = (overrides: Partial<AppConfig> = {}): AppConfig => {
@@ -10,7 +10,7 @@ const createTestAppConfig = (overrides: Partial<AppConfig> = {}): AppConfig => {
     version: '1.0.0',
     cache: true,
     interface: {
-      endpointsMenu: true,
+      modelSelect: true,
     },
     registration: {
       socialLogins: [],
@@ -32,15 +32,22 @@ const createTestAppConfig = (overrides: Partial<AppConfig> = {}): AppConfig => {
   };
 };
 
-jest.mock('@librechat/data-schemas', () => ({
-  logger: {
-    warn: jest.fn(),
-  },
-}));
+jest.mock('@librechat/data-schemas', () => {
+  process.env.CREDS_KEY =
+    process.env.CREDS_KEY ?? '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+  const actual = jest.requireActual('@librechat/data-schemas');
+  return {
+    encryptV3: actual.encryptV3,
+    decryptV3: actual.decryptV3,
+    logger: {
+      warn: jest.fn(),
+      error: jest.fn(),
+    },
+  };
+});
 
 jest.mock('~/utils', () => ({
   isEnabled: jest.fn((value) => value === 'true'),
-  normalizeEndpointName: jest.fn((name) => name),
 }));
 
 describe('getTransactionsConfig', () => {
@@ -280,6 +287,97 @@ describe('getBalanceConfig', () => {
       expect(result).toEqual({
         enabled: true,
       });
+    });
+  });
+});
+
+describe('getCustomEndpointConfig', () => {
+  describe('when appConfig is not provided', () => {
+    it('should throw an error', () => {
+      expect(() => getCustomEndpointConfig({ endpoint: 'test' })).toThrow(
+        'Config not found for the test custom endpoint.',
+      );
+    });
+  });
+
+  describe('when appConfig is provided', () => {
+    it('should return undefined when no custom endpoints are configured', () => {
+      const appConfig = createTestAppConfig();
+      const result = getCustomEndpointConfig({ endpoint: 'test', appConfig });
+      expect(result).toBeUndefined();
+    });
+
+    it('should return the matching endpoint config when found', () => {
+      const appConfig = createTestAppConfig({
+        endpoints: {
+          [EModelEndpoint.custom]: [
+            {
+              name: 'TestEndpoint',
+              apiKey: 'test-key',
+            } as TEndpoint,
+          ],
+        },
+      });
+
+      const result = getCustomEndpointConfig({ endpoint: 'TestEndpoint', appConfig });
+      expect(result).toEqual({
+        name: 'TestEndpoint',
+        apiKey: 'test-key',
+      });
+    });
+
+    it('should decrypt admin-encrypted API keys without mutating the stored config', () => {
+      const appConfig = createTestAppConfig({
+        endpoints: {
+          [EModelEndpoint.custom]: [
+            {
+              name: 'Encrypted',
+              apiKey: encryptV3('sk-real-key'),
+              baseURL: 'https://encrypted.example',
+            } as TEndpoint,
+          ],
+        },
+      });
+
+      const result = getCustomEndpointConfig({ endpoint: 'Encrypted', appConfig });
+      expect(result?.apiKey).toBe('sk-real-key');
+      expect(result?.baseURL).toBe('https://encrypted.example');
+      expect(appConfig.endpoints?.[EModelEndpoint.custom]?.[0].apiKey).toMatch(/^v3:/);
+    });
+
+    it('should handle case-insensitive matching for Ollama endpoint', () => {
+      const appConfig = createTestAppConfig({
+        endpoints: {
+          [EModelEndpoint.custom]: [
+            {
+              name: 'Ollama',
+              apiKey: 'ollama-key',
+            } as TEndpoint,
+          ],
+        },
+      });
+
+      const result = getCustomEndpointConfig({ endpoint: 'Ollama', appConfig });
+      expect(result).toEqual({
+        name: 'Ollama',
+        apiKey: 'ollama-key',
+      });
+    });
+
+    it('should handle mixed case endpoint names', () => {
+      const appConfig = createTestAppConfig({
+        endpoints: {
+          [EModelEndpoint.custom]: [
+            {
+              name: 'CustomAI',
+              apiKey: 'custom-key',
+            } as TEndpoint,
+          ],
+        },
+      });
+
+      const result = getCustomEndpointConfig({ endpoint: 'customai', appConfig });
+      expect(result).toBeUndefined();
     });
   });
 });

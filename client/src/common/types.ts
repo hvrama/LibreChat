@@ -1,5 +1,5 @@
 import { RefObject } from 'react';
-import { Constants, FileSources, EModelEndpoint } from 'librechat-data-provider';
+import { FileSources, EModelEndpoint, isEphemeralAgentId } from 'librechat-data-provider';
 import type { UseMutationResult } from '@tanstack/react-query';
 import type * as InputNumberPrimitive from 'rc-input-number';
 import type { SetterOrUpdater, RecoilState } from 'recoil';
@@ -7,14 +7,17 @@ import type { ColumnDef } from '@tanstack/react-table';
 import type * as t from 'librechat-data-provider';
 import type { LucideIcon } from 'lucide-react';
 import type { TranslationKeys } from '~/hooks';
+import { MCPServerDefinition } from '~/hooks/MCP/useMCPServerManager';
 
 export function isEphemeralAgent(agentId: string | null | undefined): boolean {
-  return agentId == null || agentId === '' || agentId === Constants.EPHEMERAL_AGENT_ID;
+  return isEphemeralAgentId(agentId);
 }
 
 export interface ConfigFieldDetail {
   title: string;
   description: string;
+  /** Whether the field holds a secret and should be masked (defaults to masked when omitted). */
+  sensitive?: boolean;
 }
 
 export type CodeBarProps = {
@@ -131,13 +134,6 @@ export type NavLink = {
   id: string;
 };
 
-export interface NavProps {
-  isCollapsed: boolean;
-  links: NavLink[];
-  resize?: (size: number) => void;
-  defaultActive?: string;
-}
-
 export interface DataColumnMeta {
   meta:
     | {
@@ -152,7 +148,6 @@ export enum Panel {
   actions = 'actions',
   model = 'model',
   version = 'version',
-  mcp = 'mcp',
 }
 
 export type FileSetter =
@@ -174,15 +169,6 @@ export type ActionAuthForm = {
   client_url: string;
   scope: string;
   token_exchange_method: t.TokenExchangeMethodEnum;
-};
-
-export type MCPForm = ActionAuthForm & {
-  name?: string;
-  description?: string;
-  url?: string;
-  tools?: string[];
-  icon?: string;
-  trust?: boolean;
 };
 
 export type ActionWithNullableMetadata = Omit<t.Action, 'metadata'> & {
@@ -225,6 +211,7 @@ export interface MCPServerInfo {
   tools: t.AgentToolType[];
   isConfigured: boolean;
   isConnected: boolean;
+  consumeOnly?: boolean;
   metadata: t.TPlugin;
 }
 
@@ -246,6 +233,11 @@ export type AgentPanelContextType = {
   endpointsConfig?: t.TEndpointsConfig | null;
   /** Pre-computed MCP server information indexed by server key */
   mcpServersMap: Map<string, MCPServerInfo>;
+  /** True while the MCP tools list is being fetched and no data has arrived yet,
+   * so consumers can show a skeleton instead of an empty "no tools" state. */
+  mcpToolsLoading: boolean;
+  availableMCPServers: MCPServerDefinition[];
+  availableMCPServersMap: t.MCPServersListResponse | undefined;
 };
 
 export type AgentModelPanelProps = {
@@ -323,10 +315,6 @@ export type TSetOptionsPayload = {
   setExample: TSetExample;
   addExample: () => void;
   removeExample: () => void;
-  setAgentOption: TSetOption;
-  // getConversation: () => t.TConversation | t.TPreset | null;
-  checkPluginSelection: (value: string) => boolean;
-  setTools: (newValue: string, remove?: boolean) => void;
   setOptions?: TSetOptions;
 };
 
@@ -366,9 +354,62 @@ export type TOptions = {
   isResubmission?: boolean;
   /** Currently only utilized when `isResubmission === true`, uses that message's currently attached files */
   overrideFiles?: t.TMessage['files'];
+  /**
+   * Assistant message being regenerated. Used to derive the optimistic response
+   * id for non-tail regenerations without accidentally keying the stream to the
+   * conversation tail.
+   */
+  targetResponseMessageId?: string | null;
+  /**
+   * Carry forward a user message's manually-invoked skills when the caller
+   * is resubmitting / regenerating that same message — the compose-time
+   * atom has already been drained on the original submit, so without this
+   * the second turn would run without any manual priming even though the
+   * pills are still visible on the user bubble.
+   */
+  overrideManualSkills?: string[];
+  /**
+   * Carry forward a user message's quoted excerpts when resubmitting /
+   * regenerating that same message — the compose-time atom is drained on the
+   * original submit, so without this the second turn would lose the quoted
+   * context even though the references still show on the user bubble.
+   */
+  overrideQuotes?: string[];
+  /** Added conversation for multi-convo feature - sent to server as part of submission payload */
+  addedConvo?: t.TConversation;
+  /** Reuse a durable submission identity (terminal steer recovery). */
+  overrideClientRequestId?: string;
+  /** Exact parked steer source for a recovery attempt. */
+  overrideRecoverySteerId?: string;
+  /** Exact terminal generation observed before an automatic queued start. */
+  overrideExpectedPredecessorCreatedAt?: number;
+  /** Client-only exact queue position restored if admission is rejected. */
+  overrideQueuedMessageOrigin?: unknown;
 };
 
-export type TAskFunction = (props: TAskProps, options?: TOptions) => void;
+export type TAskFunction = (props: TAskProps, options?: TOptions) => false | void;
+
+/**
+ * Stable context object passed from non-memo'd wrapper components (Message, MessageContent)
+ * to memo'd inner components (MessageRender, ContentRender) via props.
+ *
+ * This avoids subscribing to ChatContext inside memo'd components, which would bypass React.memo
+ * and cause unnecessary re-renders when `isSubmitting` changes during streaming.
+ *
+ * The `isSubmitting` property should use a getter backed by a ref so it returns the current
+ * value at call-time (for callback guards) without being a reactive dependency.
+ */
+export type TMessageChatContext = {
+  ask: TAskFunction;
+  index: number;
+  regenerate: (message: t.TMessage, options?: { addedConvo?: t.TConversation | null }) => void;
+  conversation: t.TConversation | null;
+  latestMessageId: string | undefined;
+  latestMessageDepth: number | undefined;
+  handleContinue: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  /** Should be a getter backed by a ref — reads current value without triggering re-renders */
+  readonly isSubmitting: boolean;
+};
 
 export type TMessageProps = {
   conversation?: t.TConversation | null;
@@ -447,7 +488,7 @@ export type TDialogProps = {
   onOpenChange: (open: boolean) => void;
 };
 
-export type TPluginStoreDialogProps = {
+export type ToolDialogProps = {
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
 };
@@ -569,11 +610,6 @@ export interface ModelItemProps {
   className?: string;
 }
 
-export type ContextType = {
-  navVisible: boolean;
-  setNavVisible: React.Dispatch<React.SetStateAction<boolean>>;
-};
-
 export interface SwitcherProps {
   endpoint?: t.EModelEndpoint | null;
   endpointKeyProvided: boolean;
@@ -594,7 +630,6 @@ export type NewConversationParams = {
   preset?: Partial<t.TPreset>;
   modelsData?: t.TModelsConfig;
   buildDefault?: boolean;
-  keepLatestMessage?: boolean;
   keepAddedConvos?: boolean;
   disableParams?: boolean;
 };
@@ -602,7 +637,6 @@ export type NewConversationParams = {
 export type ConvoGenerator = (params: NewConversationParams) => void | t.TConversation;
 
 export type TBaseResData = {
-  plugin?: t.TResPlugin;
   final?: boolean;
   initial?: boolean;
   previousMessages?: t.TMessage[];
@@ -642,5 +676,8 @@ export type TThread = { id: string; createdAt: string };
 declare global {
   interface Window {
     google_tag_manager?: unknown;
+    __LIBRECHAT_CONFIG__?: {
+      enableQueryDevtools?: boolean;
+    };
   }
 }

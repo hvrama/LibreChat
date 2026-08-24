@@ -3,21 +3,26 @@ import { useAtomValue } from 'jotai';
 import { useRecoilValue } from 'recoil';
 import type { TMessageContentParts } from 'librechat-data-provider';
 import type { TMessageProps, TMessageIcon } from '~/common';
-import { useMessageHelpers, useLocalize, useAttachments } from '~/hooks';
+import {
+  cn,
+  getMessageAriaLabel,
+  areMessageRowPropsEqual,
+  getHeaderPrefixForScreenReader,
+} from '~/utils';
+import { useMessageHelpers, useLocalize, useAttachments, useContentMetadata } from '~/hooks';
+import AuthorHeader from '~/components/Chat/Messages/Content/Parts/AuthorHeader';
+import MessageTimestamp from '~/components/Chat/Messages/ui/MessageTimestamp';
 import MessageIcon from '~/components/Chat/Messages/MessageIcon';
 import ContentParts from './Content/ContentParts';
 import { fontSizeAtom } from '~/store/fontSize';
 import SiblingSwitch from './SiblingSwitch';
-import MultiMessage from './MultiMessage';
 import HoverButtons from './HoverButtons';
 import SubRow from './SubRow';
-import { cn } from '~/utils';
 import store from '~/store';
 
-export default function Message(props: TMessageProps) {
+function MessageParts(props: TMessageProps) {
   const localize = useLocalize();
-  const { message, siblingIdx, siblingCount, setSiblingIdx, currentEditId, setCurrentEditId } =
-    props;
+  const { message, siblingIdx, siblingCount, setSiblingIdx } = props;
   const { attachments, searchResults } = useAttachments({
     messageId: message?.messageId,
     attachments: message?.attachments,
@@ -32,7 +37,7 @@ export default function Message(props: TMessageProps) {
     handleScroll,
     conversation,
     isSubmitting,
-    latestMessage,
+    latestMessageId,
     handleContinue,
     copyToClipboard,
     regenerateMessage,
@@ -40,7 +45,7 @@ export default function Message(props: TMessageProps) {
 
   const fontSize = useAtomValue(fontSizeAtom);
   const maximizeChatSpace = useRecoilValue(store.maximizeChatSpace);
-  const { children, messageId = null, isCreatedByUser } = message ?? {};
+  const { messageId = null, isCreatedByUser } = message ?? {};
 
   const name = useMemo(() => {
     let result = '';
@@ -75,15 +80,36 @@ export default function Message(props: TMessageProps) {
     ],
   );
 
+  const authorHeader = useMemo(
+    () =>
+      isCreatedByUser === true ? undefined : (
+        <AuthorHeader
+          icon={<MessageIcon iconData={iconData} assistant={assistant} agent={agent} />}
+          label={name}
+        />
+      ),
+    [isCreatedByUser, iconData, assistant, agent, name],
+  );
+
+  const { hasParallelContent } = useContentMetadata(message);
+
   if (!message) {
     return null;
   }
 
+  const getChatWidthClass = () => {
+    if (maximizeChatSpace) {
+      return 'w-full max-w-full md:px-5 lg:px-1 xl:px-5';
+    }
+    if (hasParallelContent) {
+      return 'md:max-w-[58rem] xl:max-w-[70rem]';
+    }
+    return 'md:max-w-[47rem] xl:max-w-[55rem]';
+  };
+
   const baseClasses = {
     common: 'group mx-auto flex flex-1 gap-3 transition-all duration-300 transform-gpu',
-    chat: maximizeChatSpace
-      ? 'w-full max-w-full md:px-5 lg:px-1 xl:px-5'
-      : 'md:max-w-[47rem] xl:max-w-[55rem]',
+    chat: getChatWidthClass(),
   };
 
   return (
@@ -96,25 +122,39 @@ export default function Message(props: TMessageProps) {
         <div className="m-auto justify-center p-4 py-2 md:gap-6">
           <div
             id={messageId ?? ''}
-            aria-label={`message-${message.depth}-${messageId}`}
-            className={cn(baseClasses.common, baseClasses.chat, 'message-render')}
+            aria-label={getMessageAriaLabel(message, localize)}
+            className={cn(
+              baseClasses.common,
+              baseClasses.chat,
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-xheavy',
+              'message-render',
+            )}
           >
-            <div className="relative flex flex-shrink-0 flex-col items-center">
-              <div className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full pt-0.5">
-                <MessageIcon iconData={iconData} assistant={assistant} agent={agent} />
+            {!hasParallelContent && (
+              <div className="relative flex flex-shrink-0 flex-col items-center">
+                <div className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full pt-0.5">
+                  <MessageIcon iconData={iconData} assistant={assistant} agent={agent} />
+                </div>
               </div>
-            </div>
+            )}
             <div
               className={cn(
-                'relative flex w-11/12 flex-col',
+                'relative flex flex-col',
+                hasParallelContent ? 'w-full' : 'w-11/12',
                 isCreatedByUser ? 'user-turn' : 'agent-turn',
               )}
             >
-              <h2 className={cn('select-none font-semibold text-text-primary', fontSize)}>
-                {name}
-              </h2>
+              {!hasParallelContent && (
+                <h2 className={cn('select-none font-semibold text-text-primary', fontSize)}>
+                  <span className="sr-only">
+                    {getHeaderPrefixForScreenReader(message, localize)}
+                  </span>
+                  {name}
+                  <MessageTimestamp value={message.createdAt ?? message.clientTimestamp} />
+                </h2>
+              )}
               <div className="flex flex-col gap-1">
-                <div className="flex max-w-full flex-grow flex-col gap-0">
+                <div className="flex min-h-[20px] max-w-full flex-grow flex-col gap-0">
                   <ContentParts
                     edit={edit}
                     isLast={isLast}
@@ -123,16 +163,18 @@ export default function Message(props: TMessageProps) {
                     attachments={attachments}
                     isSubmitting={isSubmitting}
                     searchResults={searchResults}
+                    manualSkills={message.manualSkills}
                     messageId={message.messageId}
+                    authorHeader={authorHeader}
                     setSiblingIdx={setSiblingIdx}
                     isCreatedByUser={message.isCreatedByUser}
                     conversationId={conversation?.conversationId}
-                    isLatestMessage={messageId === latestMessage?.messageId}
+                    isLatestMessage={messageId === latestMessageId}
                     content={message.content as Array<TMessageContentParts | undefined>}
                   />
                 </div>
                 {isLast && isSubmitting ? (
-                  <div className="mt-1 h-[27px] bg-transparent" />
+                  <div className="mt-1 h-[31px] bg-transparent" />
                 ) : (
                   <SubRow classes="text-xs">
                     <SiblingSwitch
@@ -150,7 +192,7 @@ export default function Message(props: TMessageProps) {
                       regenerate={() => regenerateMessage()}
                       copyToClipboard={copyToClipboard}
                       handleContinue={handleContinue}
-                      latestMessage={latestMessage}
+                      latestMessageId={latestMessageId}
                       isLast={isLast}
                     />
                   </SubRow>
@@ -160,14 +202,8 @@ export default function Message(props: TMessageProps) {
           </div>
         </div>
       </div>
-      <MultiMessage
-        key={messageId}
-        messageId={messageId}
-        conversation={conversation}
-        messagesTree={children ?? []}
-        currentEditId={currentEditId}
-        setCurrentEditId={setCurrentEditId}
-      />
     </>
   );
 }
+
+export default React.memo(MessageParts, areMessageRowPropsEqual);

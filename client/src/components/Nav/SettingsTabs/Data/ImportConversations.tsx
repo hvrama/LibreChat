@@ -1,20 +1,18 @@
 import { useState, useRef, useCallback } from 'react';
 import { Import } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { QueryKeys, TStartupConfig } from 'librechat-data-provider';
+import type { TStartupConfig } from 'librechat-data-provider';
 import { Spinner, useToastContext, Label, Button } from '@librechat/client';
-import { useUploadConversationsMutation } from '~/data-provider';
+import { startupConfigKey, useUploadConversationsMutation } from '~/data-provider';
 import { NotificationSeverity } from '~/common';
 import { useLocalize } from '~/hooks';
 import { cn, logger } from '~/utils';
 
 function ImportConversations() {
-  const queryClient = useQueryClient();
-  const startupConfig = queryClient.getQueryData<TStartupConfig>([QueryKeys.startupConfig]);
   const localize = useLocalize();
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
   const { showToast } = useToastContext();
-
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [isUploading, setIsUploading] = useState(false);
 
   const handleSuccess = useCallback(() => {
@@ -53,7 +51,8 @@ function ImportConversations() {
   const handleFileUpload = useCallback(
     async (file: File) => {
       try {
-        const maxFileSize = (startupConfig as any)?.conversationImportMaxFileSize;
+        const startupConfig = queryClient.getQueryData<TStartupConfig>(startupConfigKey(true));
+        const maxFileSize = startupConfig?.conversationImportMaxFileSize;
         if (maxFileSize && file.size > maxFileSize) {
           const size = (maxFileSize / (1024 * 1024)).toFixed(2);
           showToast({
@@ -76,7 +75,7 @@ function ImportConversations() {
         });
       }
     },
-    [uploadFile, showToast, localize, startupConfig],
+    [uploadFile, showToast, localize, queryClient],
   );
 
   const handleFileChange = useCallback(
@@ -119,11 +118,16 @@ function ImportConversations() {
         aria-labelledby="import-conversation-label"
       >
         {isUploading ? (
-          <Spinner className="mr-1 w-4" />
+          <>
+            <Spinner className="mr-1 w-4" />
+            <span>{localize('com_ui_importing')}</span>
+          </>
         ) : (
-          <Import className="mr-1 flex h-4 w-4 items-center stroke-1" />
+          <>
+            <Import className="mr-1 flex h-4 w-4 items-center stroke-1" aria-hidden="true" />
+            <span>{localize('com_ui_import')}</span>
+          </>
         )}
-        <span>{localize('com_ui_import')}</span>
       </Button>
       <input
         ref={fileInputRef}

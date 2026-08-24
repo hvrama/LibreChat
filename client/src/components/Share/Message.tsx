@@ -1,19 +1,18 @@
 import { useAtomValue } from 'jotai';
 import type { TMessageProps } from '~/common';
+import AuthorHeader from '~/components/Chat/Messages/Content/Parts/AuthorHeader';
 import MinimalHoverButtons from '~/components/Chat/Messages/MinimalHoverButtons';
 import MessageContent from '~/components/Chat/Messages/Content/MessageContent';
+import MessageTimestamp from '~/components/Chat/Messages/ui/MessageTimestamp';
 import SearchContent from '~/components/Chat/Messages/Content/SearchContent';
 import SiblingSwitch from '~/components/Chat/Messages/SiblingSwitch';
-import { Plugin } from '~/components/Messages/Content';
 import SubRow from '~/components/Chat/Messages/SubRow';
 import { fontSizeAtom } from '~/store/fontSize';
 import { MessageContext } from '~/Providers';
-import { useAttachments } from '~/hooks';
-
 import MultiMessage from './MultiMessage';
-import { cn } from '~/utils';
-
+import { useAttachments } from '~/hooks';
 import Icon from './MessageIcon';
+import { cn } from '~/utils';
 export default function Message(props: TMessageProps) {
   const fontSize = useAtomValue(fontSizeAtom);
   const {
@@ -68,9 +67,12 @@ export default function Message(props: TMessageProps) {
             <div
               className={cn('relative flex w-11/12 flex-col', isCreatedByUser ? '' : 'agent-turn')}
             >
-              <div className={cn('select-none font-semibold', fontSize)}>{messageLabel}</div>
+              <div className={cn('select-none font-semibold', fontSize)}>
+                {messageLabel}
+                <MessageTimestamp value={message.createdAt ?? message.clientTimestamp} />
+              </div>
               <div className="flex-col gap-1 md:gap-3">
-                <div className="flex max-w-full flex-grow flex-col gap-0">
+                <div className="flex min-h-[20px] max-w-full flex-grow flex-col gap-0">
                   <MessageContext.Provider
                     value={{
                       messageId,
@@ -80,20 +82,26 @@ export default function Message(props: TMessageProps) {
                       isLatestMessage: false, // No concept of latest message in share view
                     }}
                   >
-                    {/* Legacy Plugins */}
-                    {message.plugin && <Plugin plugin={message.plugin} />}
                     {message.content ? (
                       <SearchContent
                         message={message}
                         attachments={attachments}
                         searchResults={searchResults}
+                        authorHeader={
+                          isCreatedByUser ? undefined : (
+                            <AuthorHeader
+                              icon={<Icon message={message} conversation={conversation} />}
+                              label={messageLabel}
+                            />
+                          )
+                        }
                       />
                     ) : (
                       <MessageContent
                         edit={false}
                         error={error}
                         isLast={false}
-                        ask={() => ({})}
+                        ask={() => {}}
                         text={text || ''}
                         message={message}
                         isSubmitting={false}

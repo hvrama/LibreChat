@@ -1,13 +1,13 @@
+import { useCallback, useMemo } from 'react';
 import throttle from 'lodash/throttle';
-import { useEffect, useRef, useCallback, useMemo } from 'react';
-import { Constants, isAssistantsEndpoint, isAgentsEndpoint } from 'librechat-data-provider';
+import { isAssistantsEndpoint, isAgentsEndpoint } from 'librechat-data-provider';
 import type { TMessageProps } from '~/common';
 import { useMessagesViewContext, useAssistantsMapContext, useAgentsMapContext } from '~/Providers';
-import { getTextKey, TEXT_KEY_DIVIDER, logger } from '~/utils';
 import useCopyToClipboard from './useCopyToClipboard';
+import { useGetAddedConvo } from '~/hooks/Chat';
+import { logger } from '~/utils';
 
 export default function useMessageHelpers(props: TMessageProps) {
-  const latestText = useRef<string | number>('');
   const { message, currentEditId, setCurrentEditId } = props;
 
   const {
@@ -16,62 +16,18 @@ export default function useMessageHelpers(props: TMessageProps) {
     regenerate,
     isSubmitting,
     conversation,
-    latestMessage,
     setAbortScroll,
     handleContinue,
-    setLatestMessage,
+    latestMessageId,
   } = useMessagesViewContext();
   const agentsMap = useAgentsMapContext();
   const assistantMap = useAssistantsMapContext();
 
+  const getAddedConvo = useGetAddedConvo();
+
   const { text, content, children, messageId = null, isCreatedByUser } = message ?? {};
   const edit = messageId === currentEditId;
   const isLast = children?.length === 0 || children?.length === undefined;
-
-  useEffect(() => {
-    const convoId = conversation?.conversationId;
-    if (convoId === Constants.NEW_CONVO) {
-      return;
-    }
-    if (!message) {
-      return;
-    }
-    if (!isLast) {
-      return;
-    }
-
-    const textKey = getTextKey(message, convoId);
-
-    // Check for text/conversation change
-    const logInfo = {
-      textKey,
-      'latestText.current': latestText.current,
-      messageId: message.messageId,
-      convoId,
-    };
-
-    /* Extracted convoId from previous textKey (format: messageId|||length|||lastChars|||convoId) */
-    let previousConvoId: string | null = null;
-    if (
-      latestText.current &&
-      typeof latestText.current === 'string' &&
-      latestText.current.length > 0
-    ) {
-      const parts = latestText.current.split(TEXT_KEY_DIVIDER);
-      previousConvoId = parts[parts.length - 1] || null;
-    }
-
-    if (
-      textKey !== latestText.current ||
-      (convoId != null && previousConvoId != null && convoId !== previousConvoId)
-    ) {
-      logger.log('latest_message', '[useMessageHelpers] Setting latest message: ', logInfo);
-      latestText.current = textKey;
-      setLatestMessage({ ...message });
-    } else {
-      logger.log('latest_message', 'No change in latest message', logInfo);
-    }
-  }, [isLast, message, setLatestMessage, conversation?.conversationId]);
 
   const enterEdit = useCallback(
     (cancel?: boolean) => setCurrentEditId && setCurrentEditId(cancel === true ? -1 : messageId),
@@ -122,7 +78,7 @@ export default function useMessageHelpers(props: TMessageProps) {
       return;
     }
 
-    regenerate(message);
+    regenerate(message, { addedConvo: getAddedConvo() });
   };
 
   const copyToClipboard = useCopyToClipboard({ text, content });
@@ -138,8 +94,8 @@ export default function useMessageHelpers(props: TMessageProps) {
     conversation,
     isSubmitting,
     handleScroll,
-    latestMessage,
     handleContinue,
+    latestMessageId,
     copyToClipboard,
     regenerateMessage,
   };
