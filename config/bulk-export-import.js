@@ -523,7 +523,7 @@ async function importConversationFile(filePath, targetUserId, context) {
     if (batchMessages.length > 0) {
       const msgOps = batchMessages.map((msg) => ({
         updateOne: {
-          filter: { messageId: msg.messageId },
+          filter: { messageId: msg.messageId, user: targetUserId },
           update: { $set: msg },
           upsert: true,
           timestamps: false,
