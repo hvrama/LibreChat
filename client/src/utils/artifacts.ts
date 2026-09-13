@@ -6,6 +6,7 @@ import type {
 } from '@codesandbox/sandpack-react';
 import type { TStartupConfig, TAttachment, TFile } from 'librechat-data-provider';
 import type { Artifact } from '~/common';
+import { printListenerScript } from './print';
 
 const artifactFilename = {
   'application/vnd.react': 'App.tsx',
@@ -912,6 +913,7 @@ export function fileToArtifact(
 }
 
 export const sharedFiles = {
+  '/print.ts': printListenerScript,
   '/lib/utils.ts': shadcnComponents.utils,
   '/components/ui/accordion.tsx': shadcnComponents.accordian,
   '/components/ui/alert-dialog.tsx': shadcnComponents.alertDialog,

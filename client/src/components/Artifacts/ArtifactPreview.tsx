@@ -7,6 +7,7 @@ import type {
 import type { SandpackStartupConfig } from '~/utils/artifacts';
 import type { ArtifactFiles } from '~/common';
 import { sharedFiles, buildSandpackOptions } from '~/utils/artifacts';
+import { injectPrintListenerIntoFiles } from '~/utils/print';
 
 export const ArtifactPreview = memo(function ({
   files,
@@ -30,14 +31,12 @@ export const ArtifactPreview = memo(function ({
       return files;
     }
     const code = currentCode ?? '';
-    if (!code) {
-      return files;
+    const withEdits = code ? { ...files, [fileKey]: { code } } : files;
+    if (template !== 'static') {
+      return withEdits;
     }
-    return {
-      ...files,
-      [fileKey]: { code },
-    };
-  }, [currentCode, files, fileKey]);
+    return injectPrintListenerIntoFiles(withEdits);
+  }, [currentCode, files, fileKey, template]);
 
   const options: SandpackProviderProps['options'] = useMemo(
     () => buildSandpackOptions(template, startupConfig),

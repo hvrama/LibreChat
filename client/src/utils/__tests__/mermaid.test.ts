@@ -67,6 +67,11 @@ describe('mermaid config', () => {
       expect(files['mermaid.css']).toBeDefined();
     });
 
+    it('registers the print listener in the entry file', () => {
+      const files = getMermaidFiles(content, true);
+      expect(files['index.tsx']).toContain('import "./print";');
+    });
+
     it('uses artifact flowchart config with htmlLabels: true', () => {
       const files = getMermaidFiles(content, true);
       expect(files['/components/ui/MermaidDiagram.tsx']).toContain('"htmlLabels": true');

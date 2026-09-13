@@ -2144,5 +2144,8 @@
   "com_ui_zoom_in": "Zoom in",
   "com_ui_zoom_level": "Zoom level",
   "com_ui_zoom_out": "Zoom out",
-  "com_user_message": "You"
+  "com_user_message": "You",
+  "com_ui_save_as_pdf": "Save as PDF",
+  "com_ui_save_pdf_single_page": "Fit to one page",
+  "com_ui_save_pdf_multi_page": "Split across pages"
 }

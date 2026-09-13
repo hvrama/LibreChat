@@ -12,6 +12,7 @@ import {
   TOOL_ARTIFACT_TYPES,
 } from '~/utils/artifacts';
 import { getMarkdownFiles } from '~/utils/markdown';
+import { reactEntryWithPrint } from '~/utils/print';
 import { getMermaidFiles } from '~/utils/mermaid';
 
 export default function useArtifactProps({ artifact }: { artifact: Artifact }) {
@@ -64,6 +65,9 @@ export default function useArtifactProps({ artifact }: { artifact: Artifact }) {
     const files = removeNullishValues({
       [fileKey]: artifact.content,
     });
+    if (getTemplate(type, artifact.language) === 'react-ts') {
+      return [fileKey, { ...files, 'index.tsx': reactEntryWithPrint }];
+    }
     return [fileKey, files];
   }, [artifact.type, artifact.content, artifact.language, artifact.title, isDarkMode]);
 

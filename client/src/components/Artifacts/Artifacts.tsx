@@ -10,6 +10,7 @@ import { useShareContext, useMutationState } from '~/Providers';
 import useArtifacts from '~/hooks/Artifacts/useArtifacts';
 import DownloadArtifact from './DownloadArtifact';
 import ArtifactVersion from './ArtifactVersion';
+import PrintArtifact from './PrintArtifact';
 import ArtifactTabs from './ArtifactTabs';
 import { isCodeOnlyArtifact, isPreviewOnlyArtifact } from '~/utils/artifacts';
 import { displayFilename } from '~/components/Chat/Messages/Content/Parts/attachmentTypes';
@@ -313,6 +314,7 @@ export default function Artifacts() {
                   )}
                 </Button>
               )}
+              {displayedTab === 'preview' && <PrintArtifact previewRef={previewRef} />}
               {displayedTab !== 'preview' && isMutating && (
                 <RefreshCw size={16} className="animate-spin text-text-secondary" />
               )}

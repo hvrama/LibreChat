@@ -475,6 +475,7 @@ body {
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 import "./mermaid.css";
+import "./print";
 
 import App from "./App";
 
