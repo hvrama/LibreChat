@@ -76,11 +76,7 @@ const errorMessages = {
   },
   [ErrorTypes.GOOGLE_TOOL_CONFLICT]: 'com_error_google_tool_conflict',
   [ErrorTypes.GOOGLE_VIDEO_UNPROCESSABLE]: 'com_error_google_video_unprocessable',
-  [ErrorTypes.PROVIDER_OVERLOADED]: (json: TGenericError, localize: LocalizeFunction) => {
-    const { info } = json;
-    const provider = (alternateName[info ?? ''] as string | undefined) ?? info ?? 'The provider';
-    return localize('com_error_provider_overloaded', { 0: provider });
-  },
+  [ErrorTypes.ANTHROPIC_OVERLOADED]: 'com_error_anthropic_overloaded',
   [ErrorTypes.STREAM_EXPIRED]: 'com_error_stream_expired',
   [ViolationTypes.BAN]:
     'Your account has been temporarily banned due to violations of our service.',

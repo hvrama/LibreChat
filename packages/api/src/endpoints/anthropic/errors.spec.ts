@@ -20,10 +20,7 @@ function sdkError(status: number, body: object): Error & { status: number; error
   return error;
 }
 
-const EXPECTED = JSON.stringify({
-  type: ErrorTypes.PROVIDER_OVERLOADED,
-  info: Providers.ANTHROPIC,
-});
+const EXPECTED = JSON.stringify({ type: ErrorTypes.ANTHROPIC_OVERLOADED });
 
 describe('isAnthropicOverloadedError', () => {
   it('matches the SDK error for an HTTP 529', () => {

@@ -57,8 +57,7 @@ export function isAnthropicOverloadedError(error: unknown): boolean {
 
 /**
  * Maps a failed Anthropic request to the typed error payload the client localizes, or
- * `undefined` to leave the original error alone. `info` carries the provider so the copy can
- * name it.
+ * `undefined` to leave the original error alone.
  */
 export function resolveAnthropicApiError(params: {
   error: unknown;
@@ -70,5 +69,5 @@ export function resolveAnthropicApiError(params: {
   if (!isAnthropicOverloadedError(params.error)) {
     return undefined;
   }
-  return JSON.stringify({ type: ErrorTypes.PROVIDER_OVERLOADED, info: params.provider });
+  return JSON.stringify({ type: ErrorTypes.ANTHROPIC_OVERLOADED });
 }
