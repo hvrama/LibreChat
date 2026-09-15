@@ -2603,6 +2603,10 @@ export enum ErrorTypes {
    */
   GOOGLE_VIDEO_UNPROCESSABLE = 'google_video_unprocessable',
   /**
+   * Provider is temporarily overloaded and could not serve the request (e.g. Anthropic HTTP 529)
+   */
+  PROVIDER_OVERLOADED = 'provider_overloaded',
+  /**
    * Invalid Agent Provider (excluded by Admin)
    */
   INVALID_AGENT_PROVIDER = 'invalid_agent_provider',
