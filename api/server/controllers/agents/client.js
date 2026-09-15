@@ -85,8 +85,7 @@ const {
   hasUrlContextTool,
   hasYouTubeVideoParts,
   appendYouTubeVideoParts,
-  resolveGoogleVideoError,
-  resolveAnthropicApiError,
+  resolveProviderError,
   resolveYouTubeInjectionConfig,
   decrementPendingRequest,
   maybePrewarmCodeSandbox,
@@ -2683,14 +2682,11 @@ class AgentClient extends BaseClient {
           '[api/server/controllers/agents/client.js #sendCompletion] Unhandled error type',
           err,
         );
-        const provider = this.options.agent?.provider;
-        const mappedError =
-          resolveAnthropicApiError({ error: err, provider }) ??
-          resolveGoogleVideoError({
-            error: err,
-            provider,
-            hasYouTubeVideo: this.injectedYouTubeVideo,
-          });
+        const mappedError = resolveProviderError({
+          error: err,
+          provider: this.options.agent?.provider,
+          hasYouTubeVideo: this.injectedYouTubeVideo,
+        });
         this.contentParts.push({
           type: ContentTypes.ERROR,
           [ContentTypes.ERROR]:
