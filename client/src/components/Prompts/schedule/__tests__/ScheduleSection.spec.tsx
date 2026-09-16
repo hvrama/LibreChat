@@ -159,6 +159,22 @@ describe('ScheduleSection', () => {
     });
   });
 
+  it('never submits an enclosing form from Save or Enter', () => {
+    const outerSubmit = jest.fn((event: React.FormEvent) => event.preventDefault());
+    render(
+      <form onSubmit={outerSubmit}>
+        <ScheduleSection group={group()} promptText="Hello {{region}}" canEdit={true} />
+      </form>,
+    );
+    fireEvent.change(screen.getByLabelText('com_ui_agent'), { target: { value: 'agent_1' } });
+    fireEvent.keyDown(screen.getByLabelText('region'), { key: 'Enter' });
+    expect(mockUpdateMutate).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'com_ui_schedule_save' }));
+    expect(mockUpdateMutate).toHaveBeenCalledTimes(2);
+    expect(outerSubmit).not.toHaveBeenCalled();
+  });
+
   it('requires an agent before saving', () => {
     render(<ScheduleSection group={group()} promptText="Hello" canEdit={true} />);
     fireEvent.click(screen.getByRole('button', { name: 'com_ui_schedule_save' }));

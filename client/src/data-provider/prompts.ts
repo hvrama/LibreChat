@@ -86,6 +86,14 @@ export const useUpdatePromptGroup = (
       }
     },
     onSuccess: (response, variables, context) => {
+      queryClient.setQueryData<t.TPromptGroup>([QueryKeys.promptGroup, variables.id], (old) => ({
+        ...old,
+        ...response,
+      }));
+      queryClient.setQueryData<t.PromptGroupListData>(
+        [QueryKeys.promptGroups, name, category, pageSize],
+        (old) => (old ? updateGroupFieldsInPlace(old, { _id: variables.id, ...response }) : old),
+      );
       updateGroupInAll(queryClient, { _id: variables.id, ...response });
       if (onSuccess) {
         onSuccess(response, variables, context);

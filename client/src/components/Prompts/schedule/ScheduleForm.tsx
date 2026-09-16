@@ -94,9 +94,7 @@ export default function ScheduleForm({
   const patch = (update: Partial<ScheduleFormState>) =>
     setState((prev) => ({ ...prev, ...update }));
 
-  const handleSubmit = (event: React.FormEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
+  const submit = () => {
     const nextErrors = validateFormState(state);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
@@ -105,12 +103,22 @@ export default function ScheduleForm({
     onSubmit(toScheduleInput(state));
   };
 
+  /** The section lives inside the prompt editor's form; Enter must not submit that form. */
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' || !(event.target instanceof HTMLInputElement)) {
+      return;
+    }
+    event.preventDefault();
+    submit();
+  };
+
   const frequencyOptions = FREQUENCIES.map(({ value, key }) => ({ value, label: localize(key) }));
   const isCustom = state.frequency === 'custom';
 
   return (
-    <form
-      onSubmit={handleSubmit}
+    <div
+      role="group"
+      onKeyDown={handleKeyDown}
       className="flex flex-col gap-3 px-4 pb-4"
       aria-label={localize('com_ui_schedule')}
     >
@@ -272,10 +280,10 @@ export default function ScheduleForm({
             {localize('com_ui_cancel')}
           </Button>
         )}
-        <Button type="submit" variant="submit" size="sm" disabled={isSubmitting}>
+        <Button type="button" variant="submit" size="sm" disabled={isSubmitting} onClick={submit}>
           {localize('com_ui_schedule_save')}
         </Button>
       </div>
-    </form>
+    </div>
   );
 }
