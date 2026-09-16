@@ -28,6 +28,7 @@ jest.mock('~/models', () => {
     deleteAssistants: jest.fn().mockResolvedValue(undefined),
     deleteUserById: jest.fn().mockResolvedValue(undefined),
     deleteUserPrompts: jest.fn().mockResolvedValue(undefined),
+    clearPromptGroupSchedulesByUser: jest.fn().mockResolvedValue(0),
     deleteUserSkills: jest.fn().mockResolvedValue(undefined),
     deleteMessages: jest.fn().mockResolvedValue(undefined),
     deleteBalances: jest.fn().mockResolvedValue(undefined),

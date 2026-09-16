@@ -432,6 +432,32 @@ export const skillSyncConfigSchema = z
 export type SkillSyncConfig = z.infer<typeof skillSyncConfigSchema>;
 export type SkillSyncGitHubSourceConfig = z.infer<typeof skillSyncGitHubSourceSchema>;
 
+export const SCHEDULED_PROMPTS_MIN_POLL_SECONDS = 15;
+export const SCHEDULED_PROMPTS_MAX_POLL_SECONDS = 3600;
+export const SCHEDULED_PROMPTS_DEFAULT_PROJECT_NAME = 'Scheduled Reports';
+
+export const scheduledPromptsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  pollIntervalSeconds: z
+    .number()
+    .int()
+    .min(SCHEDULED_PROMPTS_MIN_POLL_SECONDS)
+    .max(SCHEDULED_PROMPTS_MAX_POLL_SECONDS)
+    .default(60),
+  minIntervalMinutes: z.number().int().min(1).default(1440),
+  maxSchedulesPerUser: z.number().int().min(1).default(20),
+  maxConcurrentRuns: z.number().int().min(1).max(50).default(3),
+  lockLeaseMinutes: z.number().int().min(1).default(30),
+  runTimeoutMinutes: z.number().int().min(1).default(20),
+  maxConsecutiveFailures: z.number().int().min(1).default(5),
+  retentionDays: z.number().int().min(1).default(90),
+  projectName: z.string().min(1).max(100).default(SCHEDULED_PROMPTS_DEFAULT_PROJECT_NAME),
+  maxEmailRecipients: z.number().int().min(0).default(50),
+  sharedLinkExpiryDays: z.number().int().min(0).default(0),
+});
+
+export type ScheduledPromptsConfig = z.infer<typeof scheduledPromptsConfigSchema>;
+
 // Helper type to extract the shape of the Zod object schema
 type SchemaShape<T> = T extends z.ZodObject<infer U> ? U : never;
 
@@ -1419,6 +1445,11 @@ export type TStartupConfig = {
     scraperProvider?: ScraperProviders;
     rerankerType?: RerankerTypes;
   };
+  scheduledPrompts?: {
+    enabled: boolean;
+    minIntervalMinutes: number;
+    projectName: string;
+  };
   cloudFront?: {
     cookieRefresh?: {
       endpoint: string;
@@ -1713,6 +1744,7 @@ export const configSchema = z.object({
   memory: memorySchema.optional(),
   summarization: summarizationConfigSchema.optional(),
   skillSync: skillSyncConfigSchema,
+  scheduledPrompts: scheduledPromptsConfigSchema.optional(),
   secureImageLinks: z.boolean().optional(),
   imageOutputType: z.nativeEnum(EImageOutputType).default(EImageOutputType.PNG),
   includedTools: z.array(z.string()).optional(),

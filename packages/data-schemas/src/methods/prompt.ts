@@ -1,6 +1,12 @@
 import { ResourceType, SystemCategories } from 'librechat-data-provider';
 import type { Model, Types } from 'mongoose';
-import type { IAclEntry, IPrompt, IPromptGroup, IPromptGroupDocument } from '~/types';
+import type {
+  IAclEntry,
+  IPrompt,
+  IPromptGroup,
+  IPromptGroupDocument,
+  IPromptScheduleRunDocument,
+} from '~/types';
 import { getTenantId, SYSTEM_TENANT_ID } from '~/config/tenantContext';
 import { isValidObjectIdString } from '~/utils/objectId';
 import { escapeRegExp } from '~/utils/string';
@@ -89,6 +95,16 @@ export function createPromptMethods(
   const { getSoleOwnedResourceIds } = deps;
   const { ObjectId } = mongoose.Types;
 
+  async function deletePromptScheduleRuns(groupIds: Types.ObjectId[]): Promise<void> {
+    const PromptScheduleRun = mongoose.models.PromptScheduleRun as
+      | Model<IPromptScheduleRunDocument>
+      | undefined;
+    if (!PromptScheduleRun || groupIds.length === 0) {
+      return;
+    }
+    await PromptScheduleRun.deleteMany({ promptGroupId: { $in: groupIds } });
+  }
+
   /**
    * Batch-fetches production prompts for an array of prompt groups
    * and attaches them as `productionPrompt` field.
@@ -150,7 +166,7 @@ export function createPromptMethods(
       const groups = await PromptGroup.find(query)
         .sort({ numberOfGenerations: -1, updatedAt: -1, _id: 1 })
         .select(
-          'name numberOfGenerations oneliner category author authorName createdAt updatedAt command productionId',
+          'name numberOfGenerations oneliner category author authorName createdAt updatedAt command productionId schedule',
         )
         .lean();
       return await attachProductionPrompts(groups as unknown as Array<Record<string, unknown>>);
@@ -219,7 +235,7 @@ export function createPromptMethods(
           .skip(skip)
           .limit(limit)
           .select(
-            'name numberOfGenerations oneliner category productionId author authorName createdAt updatedAt',
+            'name numberOfGenerations oneliner category productionId author authorName createdAt updatedAt schedule',
           )
           .lean(),
         PromptGroup.countDocuments(query),
@@ -264,6 +280,7 @@ export function createPromptMethods(
     }
 
     await Prompt.deleteMany(groupQuery);
+    await deletePromptScheduleRuns([new ObjectId(_id)]);
 
     try {
       await deps.removeAllPermissions({
@@ -356,7 +373,7 @@ export function createPromptMethods(
     const findQuery = PromptGroup.find(matchQuery)
       .sort({ numberOfGenerations: -1, updatedAt: -1, _id: 1 })
       .select(
-        'name numberOfGenerations oneliner category productionId author authorName createdAt updatedAt',
+        'name numberOfGenerations oneliner category productionId author authorName createdAt updatedAt schedule',
       );
 
     if (isPaginated && normalizedLimit) {
@@ -772,6 +789,7 @@ export function createPromptMethods(
 
       await PromptGroup.deleteMany({ _id: { $in: allGroupIdsToDelete } });
       await Prompt.deleteMany({ groupId: { $in: allGroupIdsToDelete } });
+      await deletePromptScheduleRuns(allGroupIdsToDelete);
     } catch (error) {
       logger.error('[deleteUserPrompts] General error:', error);
     }

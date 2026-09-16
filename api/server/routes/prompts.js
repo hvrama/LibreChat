@@ -2,11 +2,17 @@ const express = require('express');
 const { ObjectId } = require('mongodb');
 const { logger, isValidObjectIdString } = require('@librechat/data-schemas');
 const {
+  getNextRunAt,
+  assertMinInterval,
+  sanitizePromptGroup,
   generateCheckAccess,
+  resolveCronFromSource,
   markPublicPromptGroups,
   buildPromptGroupFilter,
+  PromptScheduleCronError,
   formatPromptGroupsResponse,
   safeValidatePromptGroupUpdate,
+  resolveScheduledPromptsConfig,
   createEmptyPromptGroupsResponse,
   filterAccessibleIdsBySharedLogic,
 } = require('@librechat/api');
@@ -20,9 +26,16 @@ const {
 } = require('librechat-data-provider');
 const { SystemCapabilities } = require('@librechat/data-schemas');
 const {
+  listScheduledPromptGroupsByUser,
+  countPromptGroupSchedulesByUser,
+  getOrCreateChatProjectByName,
   getListPromptGroupsByAccess,
-  getOwnedPromptGroupIds,
+  updatePromptGroupSchedule,
+  clearPromptGroupSchedule,
   incrementPromptGroupUsage,
+  setPromptGroupSchedule,
+  getOwnedPromptGroupIds,
+  getPromptScheduleRuns,
   makePromptProduction,
   updatePromptGroup,
   deletePromptGroup,
@@ -32,14 +45,21 @@ const {
   deletePrompt,
   getPrompts,
   savePrompt,
+  findUsers,
   getPrompt,
+  getAgent,
 } = require('~/models');
+const {
+  runPromptScheduleNow,
+  resolvePromptScheduleRecipients,
+} = require('~/server/services/Prompts/schedule');
 const {
   canAccessPromptGroupResource,
   canAccessPromptViaGroup,
   promptUsageLimiter,
   requireJwtAuth,
 } = require('~/server/middleware');
+const configMiddleware = require('~/server/middleware/config/app');
 const {
   findPubliclyAccessibleResources,
   getEffectivePermissions,
@@ -89,7 +109,7 @@ router.get(
         return res.status(404).send({ message: 'Prompt group not found' });
       }
 
-      res.status(200).send(group);
+      res.status(200).send(sanitizePromptGroup(group));
     } catch (error) {
       logger.error('Error getting prompt group', error);
       res.status(500).send({ message: 'Error getting prompt group' });
@@ -379,6 +399,87 @@ router.post(
 );
 
 /**
+ * Validates and persists the optional `schedule` field of a prompt group update.
+ * Returns an `{ status, error }` rejection or `null` when the schedule was applied.
+ */
+const applyScheduleUpdate = async ({ req, groupId, scheduleInput }) => {
+  const config = resolveScheduledPromptsConfig(req.config);
+  if (!config.enabled) {
+    return { status: 404, error: 'Scheduled prompts are not enabled' };
+  }
+  if (scheduleInput === null) {
+    await clearPromptGroupSchedule(groupId);
+    return null;
+  }
+
+  const existing = await getPromptGroup({ _id: groupId });
+  if (!existing) {
+    return { status: 404, error: 'Prompt group not found' };
+  }
+  const current = existing.schedule;
+  const agent_id = scheduleInput.agent_id ?? current?.agent_id;
+  const source = scheduleInput.source ?? current?.source;
+  if (!agent_id || !source) {
+    return { status: 400, error: 'schedule requires agent_id and source' };
+  }
+  if (scheduleInput.agent_id != null || !current) {
+    const agent = await getAgent({ id: agent_id });
+    if (!agent) {
+      return { status: 404, error: 'Agent not found' };
+    }
+    const agentPermissions = await getEffectivePermissions({
+      userId: req.user.id,
+      role: req.user.role,
+      resourceType: ResourceType.AGENT,
+      resourceId: agent._id,
+    });
+    if (!(agentPermissions & PermissionBits.VIEW)) {
+      return { status: 403, error: 'Insufficient permissions to use this agent' };
+    }
+  }
+
+  const timezone = scheduleInput.timezone ?? current?.timezone ?? 'UTC';
+  const enabled = scheduleInput.enabled ?? current?.enabled ?? true;
+  const cron = resolveCronFromSource(source, timezone);
+  assertMinInterval(cron, timezone, config.minIntervalMinutes);
+  const nextRunAt = enabled ? getNextRunAt(cron, timezone) : null;
+
+  if (current) {
+    const { notify, ...rest } = scheduleInput;
+    await updatePromptGroupSchedule(groupId, {
+      ...rest,
+      source,
+      timezone,
+      cron,
+      enabled,
+      nextRunAt,
+      ...(notify ? { notify: { email: notify.email ?? current.notify?.email ?? false } } : {}),
+    });
+    return null;
+  }
+
+  const count = await countPromptGroupSchedulesByUser(req.user.id);
+  if (count >= config.maxSchedulesPerUser) {
+    return { status: 409, error: `Schedule limit of ${config.maxSchedulesPerUser} reached` };
+  }
+  const project = await getOrCreateChatProjectByName(req.user.id, config.projectName);
+  await setPromptGroupSchedule(groupId, {
+    user: req.user.id,
+    agent_id,
+    promptId: scheduleInput.promptId ?? null,
+    cron,
+    timezone,
+    source,
+    variables: scheduleInput.variables,
+    enabled,
+    notify: scheduleInput.notify,
+    chatProjectId: project._id.toString(),
+    nextRunAt,
+  });
+  return null;
+};
+
+/**
  * Updates a prompt group
  * @param {object} req
  * @param {object} req.params - The request parameters
@@ -400,9 +501,26 @@ const patchPromptGroup = async (req, res) => {
       });
     }
 
-    const promptGroup = await updatePromptGroup(filter, validationResult.data);
-    res.status(200).send(promptGroup);
+    const { schedule: scheduleInput, ...groupData } = validationResult.data;
+    if (scheduleInput !== undefined) {
+      const rejection = await applyScheduleUpdate({ req, groupId, scheduleInput });
+      if (rejection) {
+        return res.status(rejection.status).send({ error: rejection.error });
+      }
+    }
+
+    const promptGroup =
+      Object.keys(groupData).length > 0
+        ? await updatePromptGroup(filter, groupData)
+        : await getPromptGroup(filter);
+    if (!promptGroup) {
+      return res.status(404).send({ error: 'Prompt group not found' });
+    }
+    res.status(200).send(sanitizePromptGroup(promptGroup));
   } catch (error) {
+    if (error instanceof PromptScheduleCronError) {
+      return res.status(400).send({ error: error.message });
+    }
     logger.error(error);
     res.status(500).send({ error: 'Error updating prompt group' });
   }
@@ -414,6 +532,7 @@ router.patch(
   canAccessPromptGroupResource({
     requiredPermission: PermissionBits.EDIT,
   }),
+  configMiddleware,
   patchPromptGroup,
 );
 
@@ -432,6 +551,153 @@ router.patch(
     } catch (error) {
       logger.error(error);
       res.status(500).send({ error: 'Error updating prompt production' });
+    }
+  },
+);
+
+/**
+ * Scheduled prompts — schedule parameters are optional fields on a prompt group.
+ * The definition is set through `PATCH /groups/:groupId` (`schedule` key); the routes
+ * below expose run-now, run history, recipient preview, and clearing.
+ */
+const requireScheduledPrompts = (req, res, next) => {
+  const config = resolveScheduledPromptsConfig(req.config);
+  if (!config.enabled) {
+    return res.status(404).send({ error: 'Scheduled prompts are not enabled' });
+  }
+  req.scheduledPromptsConfig = config;
+  next();
+};
+
+const serializeRun = (run) => ({
+  ...run,
+  _id: run._id.toString(),
+  promptGroupId: run.promptGroupId.toString(),
+  user: run.user.toString(),
+});
+
+const loadScheduledGroup = async (req, res) => {
+  const group = await getPromptGroup({ _id: req.params.groupId });
+  if (!group) {
+    res.status(404).send({ error: 'Prompt group not found' });
+    return null;
+  }
+  if (!group.schedule) {
+    res.status(404).send({ error: 'Prompt group has no schedule' });
+    return null;
+  }
+  return group;
+};
+
+router.get('/schedules', configMiddleware, requireScheduledPrompts, async (req, res) => {
+  try {
+    const groups = await listScheduledPromptGroupsByUser(req.user.id);
+    res.status(200).send(groups.map(sanitizePromptGroup));
+  } catch (error) {
+    logger.error('Error listing scheduled prompt groups', error);
+    res.status(500).send({ error: 'Error listing scheduled prompt groups' });
+  }
+});
+
+router.delete(
+  '/groups/:groupId/schedule',
+  configMiddleware,
+  requireScheduledPrompts,
+  canAccessPromptGroupResource({ requiredPermission: PermissionBits.EDIT }),
+  async (req, res) => {
+    try {
+      await clearPromptGroupSchedule(req.params.groupId);
+      const group = await getPromptGroup({ _id: req.params.groupId });
+      if (!group) {
+        return res.status(404).send({ error: 'Prompt group not found' });
+      }
+      res.status(200).send(sanitizePromptGroup(group));
+    } catch (error) {
+      logger.error('Error clearing prompt group schedule', error);
+      res.status(500).send({ error: 'Error clearing prompt group schedule' });
+    }
+  },
+);
+
+router.post(
+  '/groups/:groupId/schedule/run',
+  configMiddleware,
+  requireScheduledPrompts,
+  canAccessPromptGroupResource({ requiredPermission: PermissionBits.EDIT }),
+  async (req, res) => {
+    try {
+      const group = await loadScheduledGroup(req, res);
+      if (!group) {
+        return;
+      }
+      const groupId = group._id.toString();
+      const queued = await runPromptScheduleNow({
+        groupId,
+        userId: req.user.id,
+        config: req.scheduledPromptsConfig,
+      });
+      if (!queued) {
+        return res.status(409).send({ error: 'Schedule is already running' });
+      }
+      res.status(202).send({ promptGroupId: groupId, status: 'queued' });
+    } catch (error) {
+      logger.error('Error running prompt group schedule', error);
+      res.status(500).send({ error: 'Error running prompt group schedule' });
+    }
+  },
+);
+
+router.get(
+  '/groups/:groupId/schedule/runs',
+  configMiddleware,
+  requireScheduledPrompts,
+  canAccessPromptGroupResource({ requiredPermission: PermissionBits.VIEW }),
+  async (req, res) => {
+    try {
+      const limit = Number.parseInt(req.query.limit, 10);
+      const runs = await getPromptScheduleRuns({
+        promptGroupId: req.params.groupId,
+        limit: Number.isFinite(limit) ? limit : undefined,
+      });
+      res.status(200).send(runs.map(serializeRun));
+    } catch (error) {
+      logger.error('Error listing prompt group schedule runs', error);
+      res.status(500).send({ error: 'Error listing prompt group schedule runs' });
+    }
+  },
+);
+
+router.get(
+  '/groups/:groupId/schedule/recipients',
+  configMiddleware,
+  requireScheduledPrompts,
+  canAccessPromptGroupResource({ requiredPermission: PermissionBits.EDIT }),
+  async (req, res) => {
+    try {
+      const group = await loadScheduledGroup(req, res);
+      if (!group) {
+        return;
+      }
+      const { userIds, skipped, capped } = await resolvePromptScheduleRecipients({
+        group,
+        ownerId: group.schedule.user.toString(),
+        config: req.scheduledPromptsConfig,
+      });
+      const users = userIds.length
+        ? await findUsers({ _id: { $in: userIds } }, 'name username email')
+        : [];
+      res.status(200).send({
+        recipients: users.map((user) => ({
+          userId: user._id.toString(),
+          name: user.name || user.username,
+          email: user.email,
+        })),
+        skipped,
+        capped,
+      });
+    } catch (error) {
+      logger.error('Error resolving prompt group schedule recipients', error);
+      res.status(500).send({ error: 'Error resolving prompt group schedule recipients' });
     }
   },
 );

@@ -321,6 +321,28 @@ describe('GET /api/config', () => {
       expect(response.body.webSearch).toEqual({ searchProvider: 'tavily' });
     });
 
+    it('should expose scheduled prompts flags with defaults and from config', async () => {
+      mockGetAppConfig.mockResolvedValue(baseAppConfig);
+      const app = createApp(mockUser);
+      const disabled = await request(app).get('/api/config');
+      expect(disabled.body.scheduledPrompts).toEqual({
+        enabled: false,
+        minIntervalMinutes: 1440,
+        projectName: 'Scheduled Reports',
+      });
+
+      mockGetAppConfig.mockResolvedValue({
+        ...baseAppConfig,
+        scheduledPrompts: { enabled: true, minIntervalMinutes: 60, projectName: 'Reports' },
+      });
+      const enabled = await request(createApp(mockUser)).get('/api/config');
+      expect(enabled.body.scheduledPrompts).toEqual({
+        enabled: true,
+        minIntervalMinutes: 60,
+        projectName: 'Reports',
+      });
+    });
+
     it('should strip private prompt fields from model spec presets', async () => {
       mockGetAppConfig.mockResolvedValue({
         ...baseAppConfig,

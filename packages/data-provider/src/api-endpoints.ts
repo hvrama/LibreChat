@@ -389,6 +389,19 @@ export const getCategories = () => `${BASE_URL}/api/categories`;
 
 export const getAllPromptGroups = () => `${prompts()}/all`;
 
+/* Scheduled Prompts (embedded on prompt groups) */
+export const scheduledPromptGroups = () => `${prompts()}/schedules`;
+
+export const promptGroupSchedule = (groupId: string) =>
+  `${getPromptGroup(encodeURIComponent(groupId))}/schedule`;
+
+export const promptGroupScheduleRuns = (groupId: string) => `${promptGroupSchedule(groupId)}/runs`;
+
+export const promptGroupScheduleRecipients = (groupId: string) =>
+  `${promptGroupSchedule(groupId)}/recipients`;
+
+export const runPromptGroupSchedule = (groupId: string) => `${promptGroupSchedule(groupId)}/run`;
+
 /* Skills */
 export const skills = () => `${BASE_URL}/api/skills`;
 export const importSkill = () => `${skills()}/import`;

@@ -7,6 +7,7 @@ const {
   resolveTitleTiming,
   sanitizeModelSpecs,
   isFileSnapshotEnabled,
+  resolveScheduledPromptsConfig,
 } = require('@librechat/api');
 const { EModelEndpoint, defaultSocialLogins } = require('librechat-data-provider');
 const { logger, getTenantId, SystemCapabilities } = require('@librechat/data-schemas');
@@ -182,6 +183,12 @@ function buildWebSearchConfig(appConfig) {
   };
 }
 
+/** Client-facing subset of the scheduled prompts config. */
+function buildScheduledPromptsConfig(appConfig) {
+  const { enabled, minIntervalMinutes, projectName } = resolveScheduledPromptsConfig(appConfig);
+  return { enabled, minIntervalMinutes, projectName };
+}
+
 function buildCloudFrontStartupConfig() {
   const config = getCloudFrontConfig();
   if (
@@ -284,6 +291,8 @@ router.get('/', async function (req, res) {
     if (webSearch) {
       payload.webSearch = webSearch;
     }
+
+    payload.scheduledPrompts = buildScheduledPromptsConfig(appConfig);
 
     const buildInfo = buildBuildInfoPayload(appConfig?.interfaceConfig);
     if (buildInfo) {

@@ -186,6 +186,49 @@ describe('validatePromptGroupUpdate', () => {
   });
 });
 
+describe('updatePromptGroupSchema schedule field', () => {
+  it('accepts a preset schedule', () => {
+    const result = updatePromptGroupSchema.safeParse({
+      schedule: {
+        agent_id: 'agent_1',
+        source: { kind: 'preset', preset: 'daily', time: '09:00' },
+        timezone: 'UTC',
+        notify: { email: true },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a raw cron schedule and a partial patch', () => {
+    expect(
+      updatePromptGroupSchema.safeParse({
+        schedule: { source: { kind: 'cron', cron: '0 9 * * *' } },
+      }).success,
+    ).toBe(true);
+    expect(updatePromptGroupSchema.safeParse({ schedule: { enabled: false } }).success).toBe(true);
+  });
+
+  it('accepts null to clear the schedule', () => {
+    const result = updatePromptGroupSchema.safeParse({ schedule: null });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.schedule).toBeNull();
+    }
+  });
+
+  it('rejects unknown schedule keys and malformed sources', () => {
+    expect(updatePromptGroupSchema.safeParse({ schedule: { lockOwner: 'x' } }).success).toBe(false);
+    expect(
+      updatePromptGroupSchema.safeParse({
+        schedule: { source: { kind: 'preset', preset: 'daily', time: '9am' } },
+      }).success,
+    ).toBe(false);
+    expect(
+      updatePromptGroupSchema.safeParse({ schedule: { source: { kind: 'weekly' } } }).success,
+    ).toBe(false);
+  });
+});
+
 describe('safeValidatePromptGroupUpdate', () => {
   it('should return success true for valid input', () => {
     const result = safeValidatePromptGroupUpdate({ name: 'Test' });

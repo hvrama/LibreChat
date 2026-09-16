@@ -62,6 +62,23 @@ export function createEmptyPromptGroupsResponse({
 }
 
 /**
+ * Strips scheduler lease state from an embedded schedule before a group leaves the API.
+ * Accepts lean objects and hydrated documents (which are converted first).
+ */
+export function sanitizePromptGroup<T extends Partial<IPromptGroup>>(group: T): T {
+  const plain = (
+    typeof (group as { toObject?: () => T }).toObject === 'function'
+      ? (group as { toObject: () => T }).toObject()
+      : group
+  ) as T & { schedule?: Record<string, unknown> };
+  if (!plain.schedule) {
+    return plain;
+  }
+  const { lockOwner: _lockOwner, lockExpiresAt: _lockExpiresAt, ...schedule } = plain.schedule;
+  return { ...plain, schedule } as T;
+}
+
+/**
  * Marks prompt groups as public based on the publicly accessible IDs
  */
 export function markPublicPromptGroups(
@@ -73,8 +90,9 @@ export function markPublicPromptGroups(
   }
 
   return promptGroups.map((group) => {
+    const sanitized = sanitizePromptGroup(group);
     const isPublic = publiclyAccessibleIds.some((id) => id.equals(group._id?.toString()));
-    return isPublic ? ({ ...group, isPublic: true } as IPromptGroup) : group;
+    return isPublic ? ({ ...sanitized, isPublic: true } as IPromptGroup) : sanitized;
   });
 }
 

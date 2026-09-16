@@ -1,4 +1,5 @@
 import { createSkillSyncCredentialModel } from './skillSyncCredential';
+import { createPromptScheduleRunModel } from './promptScheduleRun';
 import { createSkillSyncStatusModel } from './skillSyncStatus';
 import { createConversationTagModel } from './conversationTag';
 import { createAgentCategoryModel } from './agentCategory';
@@ -61,6 +62,7 @@ export function createModels(mongoose: typeof import('mongoose')): {
   Preset: ReturnType<typeof createPresetModel>;
   Prompt: ReturnType<typeof createPromptModel>;
   PromptGroup: ReturnType<typeof createPromptGroupModel>;
+  PromptScheduleRun: ReturnType<typeof createPromptScheduleRunModel>;
   Skill: ReturnType<typeof createSkillModel>;
   SkillFile: ReturnType<typeof createSkillFileModel>;
   SkillSyncCredential: ReturnType<typeof createSkillSyncCredentialModel>;
@@ -99,6 +101,7 @@ export function createModels(mongoose: typeof import('mongoose')): {
     Preset: createPresetModel(mongoose),
     Prompt: createPromptModel(mongoose),
     PromptGroup: createPromptGroupModel(mongoose),
+    PromptScheduleRun: createPromptScheduleRunModel(mongoose),
     Skill: createSkillModel(mongoose),
     SkillFile: createSkillFileModel(mongoose),
     SkillSyncCredential: createSkillSyncCredentialModel(mongoose),

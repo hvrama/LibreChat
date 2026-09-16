@@ -24,6 +24,7 @@ export * from './pluginAuth';
 export * from './memory';
 /* Prompts */
 export * from './prompts';
+export * from './promptSchedule';
 /* Skills */
 export * from './skill';
 export * from './skillSync';

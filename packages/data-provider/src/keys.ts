@@ -45,6 +45,9 @@ export enum QueryKeys {
   promptGroups = 'promptGroups',
   allPromptGroups = 'allPromptGroups',
   promptGroup = 'promptGroup',
+  scheduledPromptGroups = 'scheduledPromptGroups',
+  promptGroupScheduleRuns = 'promptGroupScheduleRuns',
+  promptGroupScheduleRecipients = 'promptGroupScheduleRecipients',
   projects = 'projects',
   project = 'project',
   projectConversations = 'projectConversations',
@@ -129,4 +132,6 @@ export enum MutationKeys {
   deleteSkillNode = 'deleteSkillNode',
   updateSkillNodeContent = 'updateSkillNodeContent',
   convoPin = 'convoPin',
+  clearPromptGroupSchedule = 'clearPromptGroupSchedule',
+  runPromptGroupSchedule = 'runPromptGroupSchedule',
 }

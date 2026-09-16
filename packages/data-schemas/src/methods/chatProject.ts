@@ -42,6 +42,7 @@ export type AssignConversationToProjectResult = {
 export interface ChatProjectMethods {
   createChatProject(user: string, input: CreateChatProjectInput): Promise<IChatProject>;
   getChatProject(user: string, projectId: string): Promise<IChatProject | null>;
+  getOrCreateChatProjectByName(user: string, name: string): Promise<IChatProject>;
   listChatProjects(
     user: string,
     options?: ListChatProjectsOptions,
@@ -272,6 +273,21 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
     return project.toObject() as IChatProject;
   }
 
+  async function getOrCreateChatProjectByName(user: string, name: string): Promise<IChatProject> {
+    const ChatProject = mongoose.models.ChatProject as Model<IChatProjectDocument>;
+    const sanitizedName = sanitizeProjectInput({ name }).name;
+    if (!sanitizedName) {
+      throw new Error('Project name is required');
+    }
+    const existing = await ChatProject.findOne({ user, name: sanitizedName })
+      .sort({ createdAt: 1 })
+      .lean<IChatProject>();
+    if (existing) {
+      return existing;
+    }
+    return await createChatProject(user, { name: sanitizedName });
+  }
+
   async function getChatProject(user: string, projectId: string): Promise<IChatProject | null> {
     if (!isValidObjectIdString(projectId)) {
       return null;
@@ -454,6 +470,7 @@ export function createChatProjectMethods(mongoose: typeof import('mongoose')): C
   return {
     createChatProject,
     getChatProject,
+    getOrCreateChatProjectByName,
     listChatProjects,
     updateChatProject,
     deleteChatProject,

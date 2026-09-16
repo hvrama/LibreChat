@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang='en'>
+  <head>
+    <meta charset='UTF-8' />
+    <meta name='viewport' content='width=device-width, initial-scale=1.0' />
+    <meta name='color-scheme' content='light dark' />
+    <title>{{appName}} scheduled report</title>
+    <style>
+      body { margin: 0; padding: 0; background-color: #212121; color: #ffffff; font-family: Arial, Helvetica, sans-serif; }
+      .container { max-width: 520px; margin: 0 auto; padding: 32px 24px; }
+      .card { background-color: #2b2b2b; border-radius: 8px; padding: 24px; }
+      h1 { font-size: 20px; margin: 0 0 16px 0; }
+      p { font-size: 15px; line-height: 1.5; margin: 0 0 12px 0; }
+      .muted { color: #b0b0b0; font-size: 13px; }
+      .error { color: #ff8a80; word-break: break-word; }
+      a.button { display: inline-block; margin-top: 8px; padding: 12px 20px; background-color: #3b82f6; color: #ffffff !important; text-decoration: none; border-radius: 6px; font-weight: bold; }
+      .footer { margin-top: 24px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div class='container'>
+      <div class='card'>
+        <h1>{{appName}}: {{scheduleName}}</h1>
+        <p>Hello {{name}},</p>
+        {{#if succeeded}}
+          {{#if isRecipient}}
+            <p>A scheduled report you have access to finished running at {{runAt}}.</p>
+            <p>Sign in to view the shared conversation:</p>
+          {{else}}
+            <p>Your scheduled report finished running at {{runAt}}.</p>
+            <p>The conversation has been saved to your Scheduled Reports project:</p>
+          {{/if}}
+          {{#if link}}
+            <p><a class='button' href='{{link}}'>Open report</a></p>
+            <p class='muted'>{{link}}</p>
+          {{/if}}
+        {{else}}
+          <p>Your scheduled report did not complete at {{runAt}} (status: {{status}}).</p>
+          {{#if error}}
+            <p class='error'>{{error}}</p>
+          {{/if}}
+          <p class='muted'>Check the schedule in {{appName}} for details.</p>
+        {{/if}}
+      </div>
+      <p class='footer muted'>&copy; {{year}} {{appName}}</p>
+    </div>
+  </body>
+</html>

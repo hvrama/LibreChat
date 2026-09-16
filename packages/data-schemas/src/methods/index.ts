@@ -91,6 +91,16 @@ import type {
   SkillSyncCredentialSummary,
   UpsertSkillSyncCredentialInput,
 } from './skillSync';
+/* Scheduled Prompts */
+import { createPromptScheduleMethods, type PromptScheduleMethods } from './promptSchedule';
+import type {
+  PromptGroupScheduleFields,
+  PromptGroupSchedulePatch,
+  CreatePromptScheduleRunInput,
+  CompletePromptGroupScheduleRunInput,
+} from './promptSchedule';
+import { createRecipientMethods, type RecipientMethods } from './recipients';
+import type { ResourceAccessRecipients } from './recipients';
 /* Tier 5 — Agent */
 import { createAgentMethods, type AgentMethods, type AgentDeps } from './agent';
 /* Config */
@@ -144,6 +154,8 @@ export type AllMethods = UserMethods &
   PromptMethods &
   SkillMethods &
   SkillSyncMethods &
+  PromptScheduleMethods &
+  RecipientMethods &
   AgentMethods &
   ConfigMethods;
 
@@ -274,6 +286,8 @@ export function createMethods(
     ...promptMethods,
     ...skillMethods,
     ...createSkillSyncMethods(mongoose),
+    ...createPromptScheduleMethods(mongoose),
+    ...createRecipientMethods(mongoose),
     /* Tier 5 */
     ...agentMethods,
     /* Config */
@@ -328,6 +342,13 @@ export type {
   SkillSyncCredentialSummary,
   UpsertSkillSyncCredentialInput,
   SkillSyncMethods,
+  PromptScheduleMethods,
+  PromptGroupScheduleFields,
+  PromptGroupSchedulePatch,
+  CreatePromptScheduleRunInput,
+  CompletePromptGroupScheduleRunInput,
+  RecipientMethods,
+  ResourceAccessRecipients,
   AgentMethods,
   ConfigMethods,
 };

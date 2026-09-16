@@ -21,6 +21,7 @@ import {
 } from '~/data-provider';
 import { useResourcePermissions, useHasAccess, useLocalize, useFocusTrap } from '~/hooks';
 import OpenSidebar from '~/components/Chat/Menus/OpenSidebar';
+import { ScheduleSection } from '../schedule';
 import CategorySelector from '../fields/CategorySelector';
 import PromptVariables from '../display/PromptVariables';
 import PromptVersions from '../display/PromptVersions';
@@ -556,6 +557,7 @@ const PromptForm = ({ promptId: promptIdProp }: { promptId?: string }) => {
                       onValueChange={canEdit ? handleUpdateCommand : undefined}
                       disabled={!canEdit}
                     />
+                    <ScheduleSection group={group} promptText={promptText} canEdit={canEdit} />
                   </div>
                 )}
               </div>

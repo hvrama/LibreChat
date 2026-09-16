@@ -473,6 +473,39 @@ export const useGetPrompts = (
   );
 };
 
+export const useGetPromptGroupScheduleRuns = (
+  groupId: string,
+  config?: UseQueryOptions<t.TPromptScheduleRun[]>,
+): QueryObserverResult<t.TPromptScheduleRun[]> => {
+  return useQuery<t.TPromptScheduleRun[]>(
+    [QueryKeys.promptGroupScheduleRuns, groupId],
+    () => dataService.getPromptGroupScheduleRuns(groupId),
+    {
+      refetchOnReconnect: false,
+      retry: false,
+      ...config,
+      enabled: (config?.enabled ?? true) && !!groupId,
+    },
+  );
+};
+
+export const useGetPromptGroupScheduleRecipients = (
+  groupId: string,
+  config?: UseQueryOptions<t.TPromptScheduleRecipientsResponse>,
+): QueryObserverResult<t.TPromptScheduleRecipientsResponse> => {
+  return useQuery<t.TPromptScheduleRecipientsResponse>(
+    [QueryKeys.promptGroupScheduleRecipients, groupId],
+    () => dataService.getPromptGroupScheduleRecipients(groupId),
+    {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: false,
+      ...config,
+      enabled: (config?.enabled ?? true) && !!groupId,
+    },
+  );
+};
+
 export const useGetAllPromptGroups = <TData = t.AllPromptGroupsResponse>(
   filter?: t.AllPromptGroupsFilterRequest,
   config?: UseQueryOptions<t.AllPromptGroupsResponse, unknown, TData>,

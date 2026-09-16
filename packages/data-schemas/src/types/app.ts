@@ -14,6 +14,7 @@ import type {
   TAnthropicEndpoint,
   SummarizationConfig,
   SkillSyncConfig,
+  ScheduledPromptsConfig,
 } from 'librechat-data-provider';
 
 export type JsonSchemaType = {
@@ -67,6 +68,8 @@ export interface AppConfig {
   messageFilter?: TCustomConfig['messageFilter'];
   /** Skill sync configuration */
   skillSync?: SkillSyncConfig;
+  /** Scheduled prompts configuration */
+  scheduledPrompts?: ScheduledPromptsConfig;
   /** File storage strategy ('local', 's3', 'firebase', 'azure_blob', 'cloudfront') */
   fileStrategy: FileStorage;
   /** File strategies configuration */

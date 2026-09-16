@@ -1,4 +1,5 @@
 import type { Document, Types } from 'mongoose';
+import type { IPromptGroupSchedule } from './promptSchedule';
 
 export interface IPrompt extends Document {
   groupId: Types.ObjectId;
@@ -11,6 +12,7 @@ export interface IPrompt extends Document {
 }
 
 export interface IPromptGroup {
+  _id?: Types.ObjectId;
   name: string;
   numberOfGenerations: number;
   oneliner: string;
@@ -19,10 +21,11 @@ export interface IPromptGroup {
   author: Types.ObjectId;
   authorName: string;
   command?: string;
+  schedule?: IPromptGroupSchedule;
   createdAt?: Date;
   updatedAt?: Date;
   isPublic?: boolean;
   tenantId?: string;
 }
 
-export interface IPromptGroupDocument extends IPromptGroup, Document {}
+export interface IPromptGroupDocument extends Omit<IPromptGroup, '_id'>, Document {}

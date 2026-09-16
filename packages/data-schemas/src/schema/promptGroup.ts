@@ -1,6 +1,37 @@
 import { Schema } from 'mongoose';
-import { Constants } from 'librechat-data-provider';
-import type { IPromptGroupDocument } from '~/types';
+import { Constants, PromptScheduleRunStatus } from 'librechat-data-provider';
+import type { IPromptGroupDocument, IPromptGroupSchedule } from '~/types';
+
+const promptGroupScheduleSchema: Schema<IPromptGroupSchedule> = new Schema<IPromptGroupSchedule>(
+  {
+    user: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    agent_id: { type: String, required: true },
+    promptId: { type: Schema.Types.ObjectId, ref: 'Prompt', default: null },
+    cron: { type: String, required: true },
+    timezone: { type: String, required: true, default: 'UTC' },
+    source: { type: Schema.Types.Mixed, required: true },
+    variables: { type: Schema.Types.Mixed, default: {} },
+    enabled: { type: Boolean, default: true },
+    notify: {
+      email: { type: Boolean, default: false },
+    },
+    chatProjectId: { type: String, default: null },
+    nextRunAt: { type: Date, default: null },
+    lastRunAt: { type: Date, default: null },
+    lastRunStatus: {
+      type: String,
+      enum: Object.values(PromptScheduleRunStatus),
+      default: null,
+    },
+    lastError: { type: String, default: null },
+    lastConversationId: { type: String, default: null },
+    runCount: { type: Number, default: 0, min: 0 },
+    consecutiveFailures: { type: Number, default: 0, min: 0 },
+    lockOwner: { type: String, default: null },
+    lockExpiresAt: { type: Date, default: null },
+  },
+  { _id: false, timestamps: true },
+);
 
 const promptGroupSchema: Schema<IPromptGroupDocument> = new Schema<IPromptGroupDocument>(
   {
@@ -53,6 +84,10 @@ const promptGroupSchema: Schema<IPromptGroupDocument> = new Schema<IPromptGroupD
         `Command cannot be longer than ${Constants.COMMANDS_MAX_LENGTH} characters`,
       ],
     }, // Casting here bypasses the type error for the command field.
+    schedule: {
+      type: promptGroupScheduleSchema,
+      default: undefined,
+    },
     tenantId: {
       type: String,
       index: true,
@@ -64,5 +99,9 @@ const promptGroupSchema: Schema<IPromptGroupDocument> = new Schema<IPromptGroupD
 );
 
 promptGroupSchema.index({ numberOfGenerations: -1, updatedAt: -1, _id: 1 });
+promptGroupSchema.index(
+  { 'schedule.enabled': 1, 'schedule.nextRunAt': 1 },
+  { partialFilterExpression: { 'schedule.enabled': true } },
+);
 
 export default promptGroupSchema;

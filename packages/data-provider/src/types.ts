@@ -631,6 +631,7 @@ export type TPromptGroup = {
   author: string;
   authorName: string;
   isPublic?: boolean;
+  schedule?: TPromptGroupSchedule | null;
   createdAt?: Date;
   updatedAt?: Date;
   _id?: string;
@@ -679,7 +680,9 @@ export type TCreatePromptResponse = {
   group?: TPromptGroup;
 };
 
-export type TUpdatePromptGroupPayload = Partial<TPromptGroup>;
+export type TUpdatePromptGroupPayload = Partial<Omit<TPromptGroup, 'schedule'>> & {
+  schedule?: Partial<TPromptGroupScheduleInput> | null;
+};
 
 export type TUpdatePromptGroupVariables = {
   id: string;
@@ -723,6 +726,109 @@ export type TDeletePromptGroupResponse = TUpdatePromptLabelsResponse;
 
 export type TDeletePromptGroupRequest = {
   id: string;
+};
+
+/** Scheduled Prompts */
+
+export enum PromptSchedulePreset {
+  daily = 'daily',
+  weekdays = 'weekdays',
+  weekly = 'weekly',
+  monthly = 'monthly',
+}
+
+export type TPromptScheduleCronSource = {
+  kind: 'cron';
+  cron: string;
+};
+
+export type TPromptSchedulePresetSource = {
+  kind: 'preset';
+  preset: PromptSchedulePreset;
+  /** Local time of day in `HH:mm` (24h) */
+  time: string;
+  /** 0 (Sunday) – 6 (Saturday); used by `weekly` */
+  dayOfWeek?: number;
+  /** 1 – 31; used by `monthly` */
+  dayOfMonth?: number;
+};
+
+export type TPromptScheduleSource = TPromptScheduleCronSource | TPromptSchedulePresetSource;
+
+export enum PromptScheduleRunStatus {
+  succeeded = 'succeeded',
+  failed = 'failed',
+  skipped = 'skipped',
+}
+
+export type TPromptScheduleNotify = {
+  email: boolean;
+};
+
+/** Optional schedule embedded on a prompt group. */
+export type TPromptGroupSchedule = {
+  user: string;
+  agent_id: string;
+  promptId?: string | null;
+  cron: string;
+  timezone: string;
+  source: TPromptScheduleSource;
+  variables?: Record<string, string>;
+  enabled: boolean;
+  notify: TPromptScheduleNotify;
+  chatProjectId?: string | null;
+  nextRunAt?: string | null;
+  lastRunAt?: string | null;
+  lastRunStatus?: PromptScheduleRunStatus | null;
+  lastError?: string | null;
+  lastConversationId?: string | null;
+  runCount: number;
+  consecutiveFailures: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+/** Schedule fields accepted on prompt group create/update; `null` clears the schedule. */
+export type TPromptGroupScheduleInput = {
+  agent_id: string;
+  source: TPromptScheduleSource;
+  timezone?: string;
+  promptId?: string | null;
+  variables?: Record<string, string>;
+  enabled?: boolean;
+  notify?: Partial<TPromptScheduleNotify>;
+};
+
+export type TPromptScheduleRun = {
+  _id: string;
+  promptGroupId: string;
+  user: string;
+  status: PromptScheduleRunStatus;
+  trigger: 'schedule' | 'manual';
+  startedAt: string;
+  finishedAt?: string | null;
+  conversationId?: string | null;
+  shareId?: string | null;
+  recipientCount: number;
+  warnings: string[];
+  errorMessage?: string | null;
+};
+
+export type TPromptScheduleRecipient = {
+  userId: string;
+  name?: string;
+  email?: string;
+};
+
+export type TPromptScheduleRecipientsResponse = {
+  recipients: TPromptScheduleRecipient[];
+  skipped: string[];
+  capped: boolean;
+};
+
+export type TRunPromptScheduleResponse = {
+  promptGroupId: string;
+  status: 'queued';
 };
 
 export type TGetCategoriesResponse = TCategory[];

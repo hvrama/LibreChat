@@ -130,6 +130,7 @@
     "ai-tokenizer": "^1.0.6",
     "axios": "^1.16.0",
     "connect-redis": "^8.1.0",
+    "croner": "^9.1.0",
     "dedent": "^1.5.3",
     "eventsource": "^3.0.2",
     "express": "^5.1.0",

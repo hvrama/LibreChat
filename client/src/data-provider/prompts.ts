@@ -47,7 +47,8 @@ export const useUpdatePromptGroup = (
       ]);
       const previousListData = groupListData ? structuredClone(groupListData) : undefined;
 
-      const update = variables.payload;
+      /* The schedule input is not the stored schedule shape; the server response carries it. */
+      const { schedule: _schedule, ...update } = variables.payload;
 
       if (groupListData) {
         const newData = updateGroupFields(
@@ -377,6 +378,44 @@ export const useRecordPromptUsage = (): UseMutationResult<
         (old) => (old ? updateGroupFieldsInPlace(old, update) : old),
       );
       updateGroupInAll(queryClient, update);
+    },
+  });
+};
+
+export const useRunPromptGroupSchedule = (
+  options?: t.MutationOptions<t.TRunPromptScheduleResponse, string>,
+): UseMutationResult<t.TRunPromptScheduleResponse, unknown, string, unknown> => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (groupId: string) => dataService.runPromptGroupScheduleNow(groupId),
+    ...options,
+    onSuccess: (data, groupId, context) => {
+      queryClient.invalidateQueries([QueryKeys.promptGroupScheduleRuns, groupId]);
+      queryClient.invalidateQueries([QueryKeys.promptGroup, groupId]);
+      options?.onSuccess?.(data, groupId, context);
+    },
+  });
+};
+
+export const useClearPromptGroupSchedule = (
+  options?: t.MutationOptions<t.TPromptGroup, string>,
+): UseMutationResult<t.TPromptGroup, unknown, string, unknown> => {
+  const queryClient = useQueryClient();
+  const name = useRecoilValue(store.promptsName);
+  const category = useRecoilValue(store.promptsCategory);
+  const pageSize = useRecoilValue(store.promptsPageSize);
+  return useMutation({
+    mutationFn: (groupId: string) => dataService.clearPromptGroupSchedule(groupId),
+    ...options,
+    onSuccess: (group, groupId, context) => {
+      queryClient.setQueryData<t.TPromptGroup>([QueryKeys.promptGroup, groupId], group);
+      queryClient.setQueryData<t.PromptGroupListData>(
+        [QueryKeys.promptGroups, name, category, pageSize],
+        (old) => (old ? updateGroupFieldsInPlace(old, { _id: groupId, schedule: null }) : old),
+      );
+      updateGroupInAll(queryClient, { _id: groupId, schedule: null });
+      queryClient.removeQueries([QueryKeys.promptGroupScheduleRuns, groupId]);
+      options?.onSuccess?.(group, groupId, context);
     },
   });
 };

@@ -973,6 +973,30 @@ export function updatePromptLabels(
   return request.patch(endpoints.updatePromptLabels(variables.id), variables.payload);
 }
 
+/* Scheduled Prompts */
+
+export function getScheduledPromptGroups(): Promise<t.TPromptGroup[]> {
+  return request.get(endpoints.scheduledPromptGroups());
+}
+
+export function clearPromptGroupSchedule(groupId: string): Promise<t.TPromptGroup> {
+  return request.delete(endpoints.promptGroupSchedule(groupId));
+}
+
+export function runPromptGroupScheduleNow(groupId: string): Promise<t.TRunPromptScheduleResponse> {
+  return request.post(endpoints.runPromptGroupSchedule(groupId));
+}
+
+export function getPromptGroupScheduleRuns(groupId: string): Promise<t.TPromptScheduleRun[]> {
+  return request.get(endpoints.promptGroupScheduleRuns(groupId));
+}
+
+export function getPromptGroupScheduleRecipients(
+  groupId: string,
+): Promise<t.TPromptScheduleRecipientsResponse> {
+  return request.get(endpoints.promptGroupScheduleRecipients(groupId));
+}
+
 export function deletePromptGroup(id: string): Promise<t.TDeletePromptGroupResponse> {
   return request.delete(endpoints.deletePromptGroup(id));
 }

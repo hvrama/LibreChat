@@ -3,6 +3,7 @@ import { SquareSlash } from 'lucide-react';
 import { replaceSpecialVars } from 'librechat-data-provider';
 import type { TPromptGroup } from 'librechat-data-provider';
 import { useLocalize, useAuthContext } from '~/hooks';
+import { ScheduleSection } from '../schedule';
 import PromptDetailHeader from './PromptDetailHeader';
 import PromptVariables from './PromptVariables';
 import PromptTextCard from './PromptTextCard';
@@ -47,6 +48,8 @@ const PromptDetails = ({ group, showActions = true, onUsePrompt }: PromptDetails
           <span className="font-mono text-sm text-text-primary">/{group.command}</span>
         </div>
       )}
+
+      <ScheduleSection group={group} promptText={mainText} canEdit={false} />
 
       {showActions && <PromptActions group={group} mainText={mainText} onUsePrompt={onUsePrompt} />}
     </article>
