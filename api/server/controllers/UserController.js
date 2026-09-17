@@ -19,8 +19,12 @@ const {
   ResourceType,
 } = require('librechat-data-provider');
 const { updateUserPluginAuth, deleteUserPluginAuth } = require('~/server/services/PluginService');
+const {
+  verifyEmail,
+  approveUser,
+  resendVerificationEmail,
+} = require('~/server/services/AuthService');
 const { verifyOTPOrBackupCode } = require('~/server/services/twoFactorService');
-const { verifyEmail, resendVerificationEmail } = require('~/server/services/AuthService');
 const { getMCPManager, getFlowStateManager, getMCPServersRegistry } = require('~/config');
 const { invalidateCachedTools } = require('~/server/services/Config/getCachedTools');
 const { processDeleteRequest } = require('~/server/services/Files/process');
@@ -407,6 +411,20 @@ const verifyEmailController = async (req, res) => {
   }
 };
 
+const approveUserController = async (req, res) => {
+  try {
+    const approveUserService = await approveUser(req);
+    if (approveUserService instanceof Error) {
+      return res.status(400).json(approveUserService);
+    } else {
+      return res.status(200).json(approveUserService);
+    }
+  } catch (e) {
+    logger.error('[approveUserController]', e);
+    return res.status(500).json({ message: 'Something went wrong.' });
+  }
+};
+
 const resendVerificationController = async (req, res) => {
   try {
     const result = await resendVerificationEmail(req);
@@ -629,6 +647,7 @@ module.exports = {
   acceptTermsController,
   deleteUserController,
   verifyEmailController,
+  approveUserController,
   updateUserPluginsController,
   resendVerificationController,
   deleteUserMcpServers,

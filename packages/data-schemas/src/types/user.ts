@@ -16,6 +16,7 @@ export interface IUser extends Document {
   username?: string;
   email: string;
   emailVerified: boolean;
+  adminApproved?: boolean;
   password?: string;
   avatar?: string;
   provider: string;
@@ -90,6 +91,7 @@ export interface UpdateUserRequest {
   email?: string;
   role?: string;
   emailVerified?: boolean;
+  adminApproved?: boolean;
   avatar?: string;
   plugins?: string[];
   twoFactorEnabled?: boolean;

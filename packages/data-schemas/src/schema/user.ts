@@ -45,6 +45,10 @@ const userSchema: Schema<IUser> = new Schema<IUser>(
       required: true,
       default: false,
     },
+    adminApproved: {
+      type: Boolean,
+      default: false,
+    },
     password: {
       type: String,
       trim: true,

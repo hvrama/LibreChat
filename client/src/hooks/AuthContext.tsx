@@ -112,7 +112,10 @@ const AuthContextProvider = ({
     },
     onError: (error: TResError | unknown) => {
       const resError = error as TResError;
-      doSetError(resError.message);
+      const errorMessage = resError.response?.data?.message
+        ? `${resError.message} [${resError.response.data.message}]`
+        : resError.message;
+      doSetError(errorMessage);
       // Preserve a valid redirect_to across login failures so the deep link survives retries.
       // Cannot use buildLoginRedirectUrl() here — it reads the current pathname (already /login)
       // and would return plain /login, dropping the redirect_to destination.

@@ -48,6 +48,7 @@ const domains = {
 const AuthTokenTypes = Object.freeze({
   EMAIL_VERIFICATION: 'email_verification',
   PASSWORD_RESET: 'password_reset',
+  ADMIN_APPROVAL: 'admin_approval',
 });
 
 const latestAuthTokenOptions = Object.freeze({ sort: { createdAt: -1 } });
@@ -323,6 +324,138 @@ const verifyEmail = async (req) => {
 };
 
 /**
+ * Send Approval Request Email to the configured approver
+ * @param {Partial<IUser>} user
+ * @returns {Promise<void>}
+ */
+const sendApprovalEmail = async (user) => {
+  const approverEmail = process.env.APPROVER_EMAIL;
+  if (!approverEmail) {
+    logger.warn('[sendApprovalEmail] APPROVER_EMAIL not configured, skipping approval email.');
+    return;
+  }
+
+  const [approvalToken, hash] = createTokenHash();
+
+  const approvalLink = `${
+    domains.client
+  }/approve?token=${approvalToken}&email=${encodeURIComponent(user.email)}`;
+
+  await sendEmail({
+    email: approverEmail,
+    subject: `New user registration approval request - ${user.email}`,
+    payload: {
+      appName: process.env.APP_TITLE || 'LibreChat',
+      name: 'Approver',
+      userName: user.name || user.username || user.email,
+      userEmail: user.email,
+      approvalLink: approvalLink,
+      year: new Date().getFullYear(),
+    },
+    template: 'approvalRequest.handlebars',
+  });
+
+  await createToken({
+    userId: user._id,
+    email: user.email,
+    type: AuthTokenTypes.ADMIN_APPROVAL,
+    token: hash,
+    createdAt: Date.now(),
+    expiresIn: 604800,
+  });
+
+  logger.info(`[sendApprovalEmail] Approval link issued for [Email: ${user.email}]`);
+};
+
+/**
+ * Approve a user registration
+ * @param {ServerRequest} req
+ */
+const approveUser = async (req) => {
+  const { email, token } = req.body;
+  const decodedEmail = decodeURIComponent(email);
+
+  const user = await findUser(
+    { email: decodedEmail },
+    'email _id name username adminApproved emailVerified',
+  );
+
+  if (!user) {
+    logger.warn(`[approveUser] [User not found] [Email: ${decodedEmail}]`);
+    return new Error('User not found');
+  }
+
+  if (user.adminApproved) {
+    logger.info(`[approveUser] User already approved [Email: ${decodedEmail}]`);
+    return { message: 'User has already been approved', status: 'success' };
+  }
+
+  const approvalTokenData = await findToken(
+    { userId: user._id, email: user.email, type: AuthTokenTypes.ADMIN_APPROVAL },
+    latestAuthTokenOptions,
+  );
+
+  if (!approvalTokenData) {
+    logger.warn(`[approveUser] [No approval token found] [Email: ${decodedEmail}]`);
+    return new Error('Invalid or expired approval token');
+  }
+
+  const isValid = bcrypt.compareSync(token, approvalTokenData.token);
+
+  if (!isValid) {
+    logger.warn(`[approveUser] [Invalid or expired approval token] [Email: ${decodedEmail}]`);
+    return new Error('Invalid or expired approval token');
+  }
+
+  const updatedUser = await updateUser(approvalTokenData.userId, { adminApproved: true });
+
+  if (!updatedUser) {
+    logger.warn(`[approveUser] [User update failed] [Email: ${decodedEmail}]`);
+    return new Error('Failed to update user approval status');
+  }
+
+  await deleteTokens({ token: approvalTokenData.token, type: AuthTokenTypes.ADMIN_APPROVAL });
+  logger.info(`[approveUser] User approved successfully [Email: ${decodedEmail}]`);
+
+  if (user.emailVerified && checkEmailConfig()) {
+    await sendEmail({
+      email: user.email,
+      subject: 'Your account has been approved',
+      payload: {
+        appName: process.env.APP_TITLE || 'LibreChat',
+        name: user.name || user.username || user.email,
+        loginLink: `${domains.client}/login`,
+        year: new Date().getFullYear(),
+      },
+      template: 'approvalGranted.handlebars',
+      throwError: false,
+    });
+    logger.info(`[approveUser] Approval notification email sent [Email: ${decodedEmail}]`);
+  }
+
+  const approverEmail = process.env.APPROVER_EMAIL;
+  if (approverEmail && checkEmailConfig()) {
+    await sendEmail({
+      email: approverEmail,
+      subject: `User approved - ${user.name || user.username || decodedEmail} (${decodedEmail})`,
+      payload: {
+        appName: process.env.APP_TITLE || 'LibreChat',
+        userName: user.name || user.username || decodedEmail,
+        userEmail: decodedEmail,
+        year: new Date().getFullYear(),
+      },
+      template: 'approvalAdminNotification.handlebars',
+      throwError: false,
+    });
+    logger.info(
+      `[approveUser] Approval confirmation email sent to approver [Email: ${approverEmail}]`,
+    );
+  }
+
+  return { message: 'User has been approved successfully', status: 'success' };
+};
+
+/**
  * Register a new user.
  * @param {IUser} user <email, password, name, username>
  * @param {Partial<IUser>} [additionalData={}] Trusted server-provided fields, such as CLI overrides.
@@ -397,6 +530,18 @@ const registerUser = async (user, additionalData = {}) => {
       });
     } else {
       await updateUser(newUserId, { emailVerified: true });
+    }
+
+    const approverEmail = process.env.APPROVER_EMAIL;
+    if (!additionalData.adminApproved && emailEnabled && approverEmail) {
+      await sendApprovalEmail({
+        _id: newUserId,
+        email,
+        name,
+        username,
+      });
+    } else if (!approverEmail) {
+      await updateUser(newUserId, { adminApproved: true });
     }
 
     return { status: 200, message: genericVerificationMessage };
@@ -910,6 +1055,7 @@ const resendVerificationEmail = async (req) => {
 module.exports = {
   logoutUser,
   verifyEmail,
+  approveUser,
   registerUser,
   setAuthTokens,
   resetPassword,
