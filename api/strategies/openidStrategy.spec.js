@@ -405,6 +405,88 @@ describe('setupOpenId', () => {
     });
   });
 
+  describe('authenticate', () => {
+    const { Strategy } = require('openid-client/passport');
+    const getLoginStrategy = () => require('openid-client/passport').__getStrategyByName('openid');
+    const sessionKey = 'fake-issuer.com';
+    const authorizeUrl =
+      'https://fake-issuer.com/authorize?state=s&code_challenge=abc&code_challenge_method=S256';
+    const buildRequest = () => ({ session: { [sessionKey]: { state: 's', code_verifier: 'v' } } });
+
+    beforeEach(() => {
+      Strategy.prototype.authenticate = jest.fn(function () {
+        this.redirect(authorizeUrl);
+      });
+    });
+
+    afterEach(() => {
+      delete Strategy.prototype.authenticate;
+    });
+
+    it('strips the PKCE challenge from the redirect when OPENID_USE_PKCE is false', () => {
+      const strategy = getLoginStrategy();
+      const redirect = jest.fn();
+      strategy._sessionKey = sessionKey;
+      strategy.redirect = redirect;
+      const req = buildRequest();
+
+      strategy.authenticate(req, {});
+
+      expect(redirect).toHaveBeenCalledWith('https://fake-issuer.com/authorize?state=s', undefined);
+      expect(req.session[sessionKey].code_verifier).toBe('v');
+    });
+
+    it('leaves PKCE untouched when OPENID_USE_PKCE is true', async () => {
+      process.env.OPENID_USE_PKCE = 'true';
+      await setupOpenId();
+      const strategy = getLoginStrategy();
+      const redirect = jest.fn();
+      strategy._sessionKey = sessionKey;
+      strategy.redirect = redirect;
+      const req = buildRequest();
+
+      strategy.authenticate(req, {});
+
+      expect(redirect).toHaveBeenCalledWith(authorizeUrl);
+      expect(req.session[sessionKey].code_verifier).toBe('v');
+    });
+  });
+
+  describe('customFetch PKCE handling', () => {
+    const tokenUrl = 'https://fake-issuer.com/token';
+    const getOpenIdFetch = () => {
+      const openidClient = require('openid-client');
+      const [, , , , options] = openidClient.discovery.mock.calls.at(-1);
+      return options[openidClient.customFetch];
+    };
+    const buildBody = () =>
+      new URLSearchParams({ grant_type: 'authorization_code', code_verifier: 'v' });
+
+    beforeEach(() => {
+      undici.fetch.mockResolvedValue({ status: 200, statusText: 'OK', headers: new Headers() });
+    });
+
+    it('removes code_verifier from token requests when OPENID_USE_PKCE is false', async () => {
+      const body = buildBody();
+
+      await getOpenIdFetch()(tokenUrl, { method: 'POST', body });
+
+      expect(undici.fetch).toHaveBeenCalledWith(tokenUrl, { method: 'POST', body });
+      expect(body.has('code_verifier')).toBe(false);
+      expect(body.get('grant_type')).toBe('authorization_code');
+    });
+
+    it('keeps code_verifier in token requests when OPENID_USE_PKCE is true', async () => {
+      process.env.OPENID_USE_PKCE = 'true';
+      await setupOpenId();
+      const body = buildBody();
+
+      await getOpenIdFetch()(tokenUrl, { method: 'POST', body });
+
+      expect(body.get('code_verifier')).toBe('v');
+    });
+  });
+
   it('should create a new user with correct username when preferred_username claim exists', async () => {
     // Arrange – our userinfo already has preferred_username 'testusername'
     const userinfo = tokenset.claims();

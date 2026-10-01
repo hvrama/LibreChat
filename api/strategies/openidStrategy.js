@@ -42,6 +42,9 @@ const getLogStores = require('~/cache/getLogStores');
 async function customFetch(url, options) {
   const urlStr = url.toString();
   logger.debug(`[openidStrategy] Request to: ${urlStr}`);
+  if (options.body instanceof URLSearchParams && !isEnabled(process.env.OPENID_USE_PKCE)) {
+    options.body.delete('code_verifier');
+  }
   const debugOpenId = isEnabled(process.env.DEBUG_OPENID_REQUESTS);
   if (debugOpenId) {
     logger.debug(`[openidStrategy] Request method: ${options.method || 'GET'}`);
@@ -115,6 +118,8 @@ const getOpenIdAuthorizationAudience = () =>
     .map((value) => value.trim())
     .find(Boolean);
 
+const PKCE_PARAMS = ['code_challenge', 'code_challenge_method'];
+
 /**
  * Custom OpenID Strategy
  *
@@ -124,6 +129,33 @@ const getOpenIdAuthorizationAudience = () =>
  * More info: https://github.com/panva/openid-client/pull/713
  */
 class CustomOpenIDStrategy extends OpenIDStrategy {
+  constructor(options, verify) {
+    super(options, verify);
+    this._usePKCE = options.usePKCE ?? true;
+  }
+
+  /**
+   * openid-client v6 always applies PKCE. When `usePKCE` is false, drop the challenge from the
+   * authorization redirect here and the verifier from the token request in `customFetch`, for
+   * providers such as LinkedIn that reject confidential-client token requests carrying a
+   * `code_verifier`. The verifier stays in the session because the callback handler requires it.
+   */
+  authenticate(req, options) {
+    if (this._usePKCE) {
+      return super.authenticate(req, options);
+    }
+
+    const redirect = this.redirect;
+    this.redirect = (url, status) => {
+      const target = new URL(url);
+      for (const param of PKCE_PARAMS) {
+        target.searchParams.delete(param);
+      }
+      return redirect.call(this, target.href, status);
+    };
+    return super.authenticate(req, options);
+  }
+
   currentUrl(req) {
     const hostAndProtocol = process.env.DOMAIN_SERVER;
     return new URL(`${hostAndProtocol}${req.originalUrl ?? req.url}`);
