@@ -1,16 +1,16 @@
 # Usage: npm run create-prompt config/example_prompt.yaml
 #
 # author:  email of an existing LibreChat user who will own the prompts
-#
-# Re-running is safe: prompts are matched by name (per author). An existing
-# prompt gets a new production version if its text changed, and its group
-# fields and shared flag are updated in place.
 # prompts: list of prompts to create, one prompt group each
-#   name:     required, display name of the prompt
+#   name:     required, display name of the prompt (used as the key on re-runs)
 #   prompt:   required, the prompt text ({{variables}} are supported)
 #   shared:   true  -> everyone can view and use it (read only)
 #             false -> private to the author (default)
 #   category, oneliner, command: optional
+#
+# Re-running is safe: an existing prompt with the same name gets a new
+# production version if its text changed, and its group fields and shared
+# flag are updated in place.
 
 author: admin@example.com
 
@@ -24,7 +24,3 @@ prompts:
     category: writing
     oneliner: Condense any text into three bullets
     command: summarize
-
-  - name: Code Review
-    prompt: Review the following code for bugs and suggest improvements.
-    shared: false

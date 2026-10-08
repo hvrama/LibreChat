@@ -19,29 +19,58 @@ const { PromptGroup } = require('~/db/models');
 const { silentExit } = require('./helpers');
 const connect = require('./connect');
 
+const SAMPLE_YAML = `author: admin@example.com
+
+prompts:
+  - name: Summarize
+    prompt: |
+      Summarize the following text in three bullet points:
+
+      {{text}}
+    shared: true
+    category: writing
+    oneliner: Condense any text into three bullets
+    command: summarize`;
+
 const usage = () => {
   console.orange('Usage: npm run create-prompt <path/to/prompts.yaml>');
-  console.orange('See config/example_prompt.yaml for the expected format.');
+  console.orange('');
+  console.orange('author:  email of an existing user who will own the prompts');
+  console.orange('prompts: list of prompts, matched by name on re-runs');
+  console.orange('  name, prompt: required');
+  console.orange('  shared: true shares read only with everyone (default false)');
+  console.orange('  category, oneliner, command: optional');
+  console.orange('');
+  console.orange('Example YAML:');
+  console.cyan(SAMPLE_YAML);
+};
+
+const fail = (message) => {
+  console.red(`Error: ${message}`);
+  console.orange('');
+  usage();
+  silentExit(1);
 };
 
 const loadYaml = (filePath) => {
   const absolutePath = path.resolve(process.cwd(), filePath);
   if (!fs.existsSync(absolutePath)) {
-    console.red(`Error: file not found: ${absolutePath}`);
-    silentExit(1);
+    fail(`file not found: ${absolutePath}`);
   }
-  const parsed = yaml.load(fs.readFileSync(absolutePath, 'utf8'));
+  let parsed;
+  try {
+    parsed = yaml.load(fs.readFileSync(absolutePath, 'utf8'));
+  } catch (error) {
+    fail(`invalid YAML: ${error.message}`);
+  }
   if (!parsed || typeof parsed !== 'object') {
-    console.red('Error: YAML file is empty or malformed');
-    silentExit(1);
+    fail('YAML file is empty or malformed');
   }
   if (!parsed.author) {
-    console.red('Error: `author` (email of an existing user) is required');
-    silentExit(1);
+    fail('`author` (email of an existing user) is required');
   }
   if (!Array.isArray(parsed.prompts) || parsed.prompts.length === 0) {
-    console.red('Error: `prompts` must be a non-empty list');
-    silentExit(1);
+    fail('`prompts` must be a non-empty list');
   }
   return parsed;
 };
@@ -144,16 +173,18 @@ const upsertOne = async (entry, user) => {
 
 (async () => {
   const filePath = process.argv[2];
-  if (!filePath) {
+  if (['--help', '-h', 'help'].includes(filePath)) {
     usage();
-    silentExit(1);
+    silentExit(0);
+  }
+  if (!filePath) {
+    fail('missing path to YAML file');
   }
 
   const config = loadYaml(filePath);
   const errors = config.prompts.map(validatePrompt).filter(Boolean);
   if (errors.length > 0) {
-    errors.forEach((message) => console.red(`Error: ${message}`));
-    silentExit(1);
+    fail(errors.join('\n'));
   }
 
   await connect();
