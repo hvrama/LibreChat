@@ -1,0 +1,26 @@
+# Usage: npm run create-prompt -- config/example_prompt.yaml
+#
+# author:  email of an existing LibreChat user who will own the prompts
+# prompts: list of prompts to create, one prompt group each
+#   name:     required, display name of the prompt
+#   prompt:   required, the prompt text ({{variables}} are supported)
+#   shared:   true  -> everyone can view and use it (read only)
+#             false -> private to the author (default)
+#   category, oneliner, command: optional
+
+author: admin@example.com
+
+prompts:
+  - name: Summarize
+    prompt: |
+      Summarize the following text in three bullet points:
+
+      {{text}}
+    shared: true
+    category: writing
+    oneliner: Condense any text into three bullets
+    command: summarize
+
+  - name: Code Review
+    prompt: Review the following code for bugs and suggest improvements.
+    shared: false
