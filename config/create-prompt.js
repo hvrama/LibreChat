@@ -6,7 +6,16 @@ const { AccessRoleIds, ResourceType, PrincipalType } = require('librechat-data-p
 const { User } = require('@librechat/data-schemas').createModels(mongoose);
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { grantPermission } = require('~/server/services/PermissionService');
-const { createPromptGroup, seedDefaultRoles } = require('~/models');
+const {
+  makePromptProduction,
+  createPromptGroup,
+  updatePromptGroup,
+  revokePermission,
+  seedDefaultRoles,
+  savePrompt,
+  getPrompt,
+} = require('~/models');
+const { PromptGroup } = require('~/db/models');
 const { silentExit } = require('./helpers');
 const connect = require('./connect');
 
@@ -66,15 +75,23 @@ const grantRole = (principal, groupId, accessRoleId, userId) =>
     grantedBy: userId,
   });
 
-const createOne = async (entry, user) => {
-  const shared = entry.shared === true;
+const PUBLIC_PRINCIPAL = { principalType: PrincipalType.PUBLIC, principalId: null };
+
+const syncSharing = async (shared, groupId, userId) => {
+  if (shared) {
+    await grantRole(PUBLIC_PRINCIPAL, groupId, AccessRoleIds.PROMPTGROUP_VIEWER, userId);
+    return;
+  }
+  await revokePermission(PrincipalType.PUBLIC, null, ResourceType.PROMPTGROUP, groupId);
+};
+
+const createGroup = async (entry, promptData, user) => {
   const result = await createPromptGroup({
-    prompt: { prompt: entry.prompt, type: entry.type === 'chat' ? 'chat' : 'text' },
+    prompt: promptData,
     group: buildGroup(entry),
     author: user._id,
     authorName: user.name,
   });
-
   const groupId = result.prompt.groupId;
   await grantRole(
     { principalType: PrincipalType.USER, principalId: user._id },
@@ -82,17 +99,47 @@ const createOne = async (entry, user) => {
     AccessRoleIds.PROMPTGROUP_OWNER,
     user._id,
   );
+  return groupId;
+};
 
-  if (shared) {
-    await grantRole(
-      { principalType: PrincipalType.PUBLIC, principalId: null },
-      groupId,
-      AccessRoleIds.PROMPTGROUP_VIEWER,
-      user._id,
-    );
+const updateGroup = async (entry, promptData, existing, user) => {
+  const groupId = existing._id;
+  const groupFields = buildGroup(entry);
+  const groupChanged = Object.keys(groupFields).some((key) => existing[key] !== groupFields[key]);
+  if (groupChanged) {
+    await updatePromptGroup({ _id: groupId }, groupFields);
   }
 
-  console.green(`Created "${entry.name}" (${groupId}) ${shared ? '[shared: view]' : '[private]'}`);
+  const production = existing.productionId ? await getPrompt({ _id: existing.productionId }) : null;
+  const promptChanged =
+    !production || production.prompt !== promptData.prompt || production.type !== promptData.type;
+  if (!promptChanged) {
+    return groupId;
+  }
+
+  const saved = await savePrompt({ prompt: { ...promptData, groupId }, author: user._id });
+  if (!saved.prompt) {
+    throw new Error(saved.message || 'Error saving prompt version');
+  }
+  await makePromptProduction(saved.prompt._id);
+  return groupId;
+};
+
+const upsertOne = async (entry, user) => {
+  const shared = entry.shared === true;
+  const promptData = { prompt: entry.prompt, type: entry.type === 'chat' ? 'chat' : 'text' };
+  const existing = await PromptGroup.findOne({ name: entry.name, author: user._id }).lean();
+
+  const groupId = existing
+    ? await updateGroup(entry, promptData, existing, user)
+    : await createGroup(entry, promptData, user);
+
+  await syncSharing(shared, groupId, user._id);
+
+  const action = existing ? 'Updated' : 'Created';
+  console.green(
+    `${action} "${entry.name}" (${groupId}) ${shared ? '[shared: view]' : '[private]'}`,
+  );
 };
 
 (async () => {
@@ -125,7 +172,7 @@ const createOne = async (entry, user) => {
   let failed = 0;
   for (const entry of config.prompts) {
     try {
-      await createOne(entry, user);
+      await upsertOne(entry, user);
     } catch (error) {
       failed += 1;
       console.red(`Failed "${entry.name}": ${error.message}`);

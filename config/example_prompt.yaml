@@ -1,6 +1,10 @@
 # Usage: npm run create-prompt -- config/example_prompt.yaml
 #
 # author:  email of an existing LibreChat user who will own the prompts
+#
+# Re-running is safe: prompts are matched by name (per author). An existing
+# prompt gets a new production version if its text changed, and its group
+# fields and shared flag are updated in place.
 # prompts: list of prompts to create, one prompt group each
 #   name:     required, display name of the prompt
 #   prompt:   required, the prompt text ({{variables}} are supported)
