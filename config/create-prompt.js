@@ -20,7 +20,7 @@ const { silentExit } = require('./helpers');
 const connect = require('./connect');
 
 const usage = () => {
-  console.orange('Usage: npm run create-prompt -- <path/to/prompts.yaml>');
+  console.orange('Usage: npm run create-prompt <path/to/prompts.yaml>');
   console.orange('See config/example_prompt.yaml for the expected format.');
 };
 
