@@ -1,4 +1,5 @@
 # Usage: npm run create-prompt config/example_prompt.yaml
+#        npm run create-prompt path/to/dir   (applies every .yaml/.yml in it)
 #
 # author:  email of an existing LibreChat user who will own the prompts
 # prompts: list of prompts to create, one prompt group each

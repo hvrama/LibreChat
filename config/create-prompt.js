@@ -33,7 +33,9 @@ prompts:
     command: summarize`;
 
 const usage = () => {
-  console.orange('Usage: npm run create-prompt <path/to/prompts.yaml>');
+  console.orange('Usage: npm run create-prompt <path/to/prompts.yaml | path/to/dir>');
+  console.orange('');
+  console.orange('A directory applies every .yaml / .yml file in it (non-recursive).');
   console.orange('');
   console.orange('author:  email of an existing user who will own the prompts');
   console.orange('prompts: list of prompts, matched by name on re-runs');
@@ -52,29 +54,6 @@ const fail = (message) => {
   silentExit(1);
 };
 
-const loadYaml = (filePath) => {
-  const absolutePath = path.resolve(process.cwd(), filePath);
-  if (!fs.existsSync(absolutePath)) {
-    fail(`file not found: ${absolutePath}`);
-  }
-  let parsed;
-  try {
-    parsed = yaml.load(fs.readFileSync(absolutePath, 'utf8'));
-  } catch (error) {
-    fail(`invalid YAML: ${error.message}`);
-  }
-  if (!parsed || typeof parsed !== 'object') {
-    fail('YAML file is empty or malformed');
-  }
-  if (!parsed.author) {
-    fail('`author` (email of an existing user) is required');
-  }
-  if (!Array.isArray(parsed.prompts) || parsed.prompts.length === 0) {
-    fail('`prompts` must be a non-empty list');
-  }
-  return parsed;
-};
-
 const validatePrompt = (entry, index) => {
   if (!entry || typeof entry !== 'object') {
     return `prompts[${index}] must be an object`;
@@ -86,6 +65,51 @@ const validatePrompt = (entry, index) => {
     return `prompts[${index}] ("${entry.name}") is missing a \`prompt\``;
   }
   return null;
+};
+
+const YAML_EXTENSIONS = new Set(['.yaml', '.yml']);
+
+const resolveYamlFiles = (inputPath) => {
+  const absolutePath = path.resolve(process.cwd(), inputPath);
+  if (!fs.existsSync(absolutePath)) {
+    fail(`path not found: ${absolutePath}`);
+  }
+  if (!fs.statSync(absolutePath).isDirectory()) {
+    return [absolutePath];
+  }
+  const files = fs
+    .readdirSync(absolutePath)
+    .filter((name) => YAML_EXTENSIONS.has(path.extname(name).toLowerCase()))
+    .sort()
+    .map((name) => path.join(absolutePath, name));
+  if (files.length === 0) {
+    fail(`no .yaml or .yml files found in ${absolutePath}`);
+  }
+  return files;
+};
+
+const loadYaml = (absolutePath) => {
+  const label = path.basename(absolutePath);
+  let parsed;
+  try {
+    parsed = yaml.load(fs.readFileSync(absolutePath, 'utf8'));
+  } catch (error) {
+    fail(`${label}: invalid YAML: ${error.message}`);
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    fail(`${label}: YAML file is empty or malformed`);
+  }
+  if (!parsed.author) {
+    fail(`${label}: \`author\` (email of an existing user) is required`);
+  }
+  if (!Array.isArray(parsed.prompts) || parsed.prompts.length === 0) {
+    fail(`${label}: \`prompts\` must be a non-empty list`);
+  }
+  const errors = parsed.prompts.map(validatePrompt).filter(Boolean);
+  if (errors.length > 0) {
+    fail(errors.map((message) => `${label}: ${message}`).join('\n'));
+  }
+  return { file: label, ...parsed };
 };
 
 const buildGroup = ({ name, category, oneliner, command }) => ({
@@ -171,33 +195,15 @@ const upsertOne = async (entry, user) => {
   );
 };
 
-(async () => {
-  const filePath = process.argv[2];
-  if (['--help', '-h', 'help'].includes(filePath)) {
-    usage();
-    silentExit(0);
-  }
-  if (!filePath) {
-    fail('missing path to YAML file');
-  }
-
-  const config = loadYaml(filePath);
-  const errors = config.prompts.map(validatePrompt).filter(Boolean);
-  if (errors.length > 0) {
-    fail(errors.join('\n'));
-  }
-
-  await connect();
-  await seedDefaultRoles();
-
+const applyConfig = async (config) => {
   const user = await User.findOne({ email: config.author }).lean();
   if (!user) {
-    console.red(`Error: no user found with email "${config.author}"`);
-    silentExit(1);
+    console.red(`${config.file}: no user found with email "${config.author}"`);
+    return config.prompts.length;
   }
 
   console.purple('--------------------------');
-  console.purple(`Creating ${config.prompts.length} prompt(s) as ${user.email}`);
+  console.purple(`${config.file}: applying ${config.prompts.length} prompt(s) as ${user.email}`);
   console.purple('--------------------------');
 
   let failed = 0;
@@ -208,6 +214,28 @@ const upsertOne = async (entry, user) => {
       failed += 1;
       console.red(`Failed "${entry.name}": ${error.message}`);
     }
+  }
+  return failed;
+};
+
+(async () => {
+  const inputPath = process.argv[2];
+  if (['--help', '-h', 'help'].includes(inputPath)) {
+    usage();
+    silentExit(0);
+  }
+  if (!inputPath) {
+    fail('missing path to YAML file or directory');
+  }
+
+  const configs = resolveYamlFiles(inputPath).map(loadYaml);
+
+  await connect();
+  await seedDefaultRoles();
+
+  let failed = 0;
+  for (const config of configs) {
+    failed += await applyConfig(config);
   }
 
   silentExit(failed > 0 ? 1 : 0);
