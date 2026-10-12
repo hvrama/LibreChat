@@ -159,7 +159,7 @@ describe('GET /api/messages/:conversationId with real validation middleware', ()
     expect(getConvo).toHaveBeenCalledWith(authenticatedUserId, 'convo-1');
     expect(getMessages).toHaveBeenCalledWith(
       { conversationId: 'convo-1', user: authenticatedUserId },
-      '-_id -__v -user',
+      '-_id -__v -user -content.tool_call.args -content.tool_call.output',
     );
     expect(response.status).toBe(200);
     expect(response.body).toEqual([{ messageId: 'message-1', conversationId: 'convo-1' }]);

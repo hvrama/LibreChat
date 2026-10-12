@@ -19,6 +19,9 @@ const {
 } = require('~/server/middleware');
 const db = require('~/models');
 
+/** Tool call inputs/outputs are omitted when a conversation loads. */
+const messageSelect = '-_id -__v -user -content.tool_call.args -content.tool_call.output';
+
 const router = express.Router();
 router.use(requireJwtAuth);
 
@@ -284,7 +287,7 @@ router.get('/:conversationId', prepareMessageRequestValidation, async (req, res)
     // This intentionally starts a user-scoped read before validation resolves;
     // the response remains gated on validation success below.
     const messagesPromise = validation.shouldFetchMessages
-      ? db.getMessages({ conversationId, user: req.user.id }, '-_id -__v -user').then(
+      ? db.getMessages({ conversationId, user: req.user.id }, messageSelect).then(
           (messages) => ({ messages }),
           (error) => ({ error }),
         )

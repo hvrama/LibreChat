@@ -156,7 +156,7 @@ describe('message route conversation ownership filters', () => {
     expect(response.status).toBe(200);
     expect(getMessages).toHaveBeenCalledWith(
       { conversationId: 'convo-1', user: authenticatedUserId },
-      '-_id -__v -user',
+      '-_id -__v -user -content.tool_call.args -content.tool_call.output',
     );
   });
 
@@ -201,7 +201,7 @@ describe('message route conversation ownership filters', () => {
     expect(eventsBeforeValidation).toEqual(['messages-started']);
     expect(getMessages).toHaveBeenCalledWith(
       { conversationId: 'convo-1', user: authenticatedUserId },
-      '-_id -__v -user',
+      '-_id -__v -user -content.tool_call.args -content.tool_call.output',
     );
 
     expect(response.status).toBe(200);
@@ -227,7 +227,7 @@ describe('message route conversation ownership filters', () => {
 
     expect(getMessages).toHaveBeenCalledWith(
       { conversationId: 'convo-1', user: authenticatedUserId },
-      '-_id -__v -user',
+      '-_id -__v -user -content.tool_call.args -content.tool_call.output',
     );
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: 'Conversation not found' });
