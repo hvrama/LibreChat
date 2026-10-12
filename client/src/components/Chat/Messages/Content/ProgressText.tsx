@@ -3,6 +3,9 @@ import * as Popover from '@radix-ui/react-popover';
 import CancelledIcon from './CancelledIcon';
 import { cn } from '~/utils';
 
+/** Set to `true` to restore the expandable tool call details (args/output). */
+const TOOL_CALL_DETAILS_EXPANDABLE = false;
+
 const wrapperClass =
   'progress-text-wrapper text-token-text-secondary relative -mt-[0.75px] h-5 w-full leading-5';
 
@@ -43,7 +46,7 @@ export default function ProgressText({
   icon: iconProp,
   subtitle,
   errorSuffix,
-  hasInput = true,
+  hasInput: hasInputProp = true,
   popover = false,
   isExpanded = false,
   error = false,
@@ -61,6 +64,8 @@ export default function ProgressText({
   isExpanded?: boolean;
   error?: boolean;
 }) {
+  const hasInput = hasInputProp && TOOL_CALL_DETAILS_EXPANDABLE;
+
   const getText = () => {
     if (error) {
       return finishedText;
