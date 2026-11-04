@@ -3,9 +3,14 @@ const fs = require('fs');
 const path = require('path');
 const mongoose = require('mongoose');
 const { parseArgs } = require('node:util');
-const { Conversation, Message, User, ChatProject } =
-  require('@librechat/data-schemas').createModels(mongoose);
-const { refreshChatProjectStats } = require('@librechat/data-schemas').createMethods(mongoose);
+const {
+  createModels,
+  runAsSystem,
+  tenantStorage,
+  tenantSafeBulkWrite,
+  buildRetentionVisibilityFilter,
+} = require('@librechat/data-schemas');
+const { Conversation, Message, User, ChatProject } = createModels(mongoose);
 require('module-alias')({ base: path.resolve(__dirname, '..', 'api') });
 const { silentExit } = require('./helpers');
 const connect = require('./connect');
@@ -16,12 +21,12 @@ const BATCH_SIZE = 100;
 /**
  * Fields to strip from conversation documents on export.
  */
-const CONVO_STRIP_FIELDS = ['_id', '__v', 'messages'];
+const CONVO_STRIP_FIELDS = ['_id', '__v', 'messages', 'tenantId'];
 
 /**
  * Fields to strip from message documents on export.
  */
-const MSG_STRIP_FIELDS = ['_id', '__v', '_meiliIndex'];
+const MSG_STRIP_FIELDS = ['_id', '__v', '_meiliIndex', 'tenantId'];
 const TOOL_CALL_OUTPUT_MAX_BYTES = 1024;
 
 function printUsage() {
@@ -178,6 +183,57 @@ async function getOrCreateDomainProject(domain, userId) {
 }
 
 /**
+ * Recomputes the conversation count and recency pointers of a chat project from
+ * the conversations currently visible in it, mirroring the server-side refresh.
+ * @param {string} userId - The owning user's ID.
+ * @param {string} projectId - The chat project ID.
+ */
+async function refreshProjectStats(userId, projectId) {
+  const visibleFilter = {
+    $and: [
+      { user: userId, chatProjectId: projectId },
+      { $or: [{ isArchived: false }, { isArchived: { $exists: false } }] },
+      buildRetentionVisibilityFilter(),
+    ],
+  };
+
+  const [conversationCount, latest] = await Promise.all([
+    Conversation.countDocuments(visibleFilter),
+    Conversation.findOne(visibleFilter)
+      .select('conversationId updatedAt createdAt')
+      .sort({ updatedAt: -1, _id: -1 })
+      .lean(),
+  ]);
+
+  await ChatProject.updateOne(
+    { _id: projectId, user: userId },
+    {
+      $set: {
+        conversationCount,
+        lastConversationAt: latest?.updatedAt ?? latest?.createdAt ?? null,
+        lastConversationId: latest?.conversationId ?? null,
+      },
+    },
+  );
+}
+
+/**
+ * Runs an import for a user inside that user's tenant context so every read and
+ * write is scoped (and stamped) with the user's tenant. Users without a tenant
+ * run as a system operation, matching the other maintenance scripts.
+ * @param {Object} user - The target user document.
+ * @param {() => Promise<T>} fn - The async work to run.
+ * @returns {Promise<T>}
+ * @template T
+ */
+function runAsUserTenant(user, fn) {
+  if (!user.tenantId) {
+    return runAsSystem(fn);
+  }
+  return tenantStorage.run({ tenantId: user.tenantId, userId: user._id.toString() }, fn);
+}
+
+/**
  * Strips internal MongoDB fields from a document.
  * @param {Object} doc - The lean mongoose document.
  * @param {string[]} fields - Fields to remove.
@@ -286,9 +342,7 @@ async function exportSingleConversation(filePath, conversationId) {
   const owner = await User.findById(convo.user).lean();
   const prefixedTitle = owner?.email ? `[${owner.email}] ${convo.title}` : convo.title;
 
-  const messages = await Message.find({ conversationId })
-    .lean()
-    .sort({ createdAt: 1 });
+  const messages = await Message.find({ conversationId }).lean().sort({ createdAt: 1 });
 
   const cleanedMessages = messages.map((msg) => stripFields(msg, MSG_STRIP_FIELDS));
   truncateToolCallOutputs(cleanedMessages);
@@ -315,8 +369,12 @@ async function exportSingleConversation(filePath, conversationId) {
   };
 
   fs.writeFileSync(filePath, JSON.stringify(exportData, null, 2), 'utf8');
-  console.green(`Exported conversation "${convo.title}" (${messages.length} messages) to ${filePath}`);
-  console.green('This file can be imported via the LibreChat UI (Settings > Data Controls > Import).');
+  console.green(
+    `Exported conversation "${convo.title}" (${messages.length} messages) to ${filePath}`,
+  );
+  console.green(
+    'This file can be imported via the LibreChat UI (Settings > Data Controls > Import).',
+  );
 }
 
 /**
@@ -334,9 +392,7 @@ async function exportConversations(filePath, userId, excludeDomain) {
     const excludedUsers = await User.find({ email: domainRegex }, '_id').lean();
     const excludedIds = excludedUsers.map((u) => u._id);
     if (excludedIds.length > 0) {
-      query.user = query.user
-        ? { $eq: query.user, $nin: excludedIds }
-        : { $nin: excludedIds };
+      query.user = query.user ? { $eq: query.user, $nin: excludedIds } : { $nin: excludedIds };
       console.purple(`Excluding ${excludedIds.length} user(s) with @${excludeDomain} emails.`);
     } else {
       console.gray(`No users found with @${excludeDomain} emails; nothing to exclude.`);
@@ -472,6 +528,7 @@ async function importConversationFile(filePath, targetUserId, context) {
       delete convoDoc.ownerEmail;
       convoDoc.user = targetUserId;
       delete convoDoc.expiredAt;
+      delete convoDoc.tenantId;
 
       // Group the conversation under a project named after the original
       // owner's email domain, falling back to the target user's domain.
@@ -502,6 +559,7 @@ async function importConversationFile(filePath, targetUserId, context) {
       for (const msg of messages) {
         msg.user = targetUserId;
         delete msg.expiredAt;
+        delete msg.tenantId;
         batchMessages.push(msg);
       }
     }
@@ -516,7 +574,7 @@ async function importConversationFile(filePath, targetUserId, context) {
           timestamps: false,
         },
       }));
-      await Conversation.bulkWrite(convoOps);
+      await tenantSafeBulkWrite(Conversation, convoOps);
     }
 
     // Bulk upsert messages with timestamp preservation
@@ -529,7 +587,7 @@ async function importConversationFile(filePath, targetUserId, context) {
           timestamps: false,
         },
       }));
-      await Message.bulkWrite(msgOps);
+      await tenantSafeBulkWrite(Message, msgOps);
     }
 
     totalConvos += batchConvos.length;
@@ -563,7 +621,7 @@ async function importConversationFile(filePath, targetUserId, context) {
     }
 
     if (updateOps.length > 0) {
-      await Conversation.bulkWrite(updateOps);
+      await tenantSafeBulkWrite(Conversation, updateOps);
     }
   }
 
@@ -581,19 +639,13 @@ async function importConversationFile(filePath, targetUserId, context) {
  * Imports one or more export files into the database under a target user.
  * Projects are shared across files so a domain maps to a single project.
  * @param {string[]} filePaths - The export files to import, in order.
- * @param {string} targetUserId - The user the conversations are imported for.
+ * @param {Object} targetUser - The user the conversations are imported for.
  * @param {Object} [options] - Import options.
  * @param {boolean} [options.groupByDomain=true] - Group conversations into domain projects.
  * @returns {Promise<boolean>} False when any file failed to import.
  */
-async function importConversations(filePaths, targetUserId, { groupByDomain = true } = {}) {
-  // Verify target user exists
-  const targetUser = await User.findById(targetUserId).lean();
-  if (!targetUser) {
-    console.red(`Error: No user found with ID "${targetUserId}".`);
-    console.yellow('Tip: Use "npm run list-users" to find valid users.');
-    return false;
-  }
+async function importConversations(filePaths, targetUser, { groupByDomain = true } = {}) {
+  const targetUserId = targetUser._id.toString();
   console.purple(
     `Importing conversations for user: ${targetUser.email || targetUser.name || targetUserId}`,
   );
@@ -625,7 +677,7 @@ async function importConversations(filePaths, targetUserId, { groupByDomain = tr
     console.gray('  Refreshing project statistics...');
     for (const [domain, projectId] of domainProjects) {
       try {
-        await refreshChatProjectStats(targetUserId, projectId);
+        await refreshProjectStats(targetUserId, projectId);
       } catch (err) {
         console.yellow(
           `  Warning: could not refresh stats for project "${domain}": ${err.message}`,
@@ -714,7 +766,7 @@ async function gracefulExit(code = 0) {
   await connect();
 
   // Resolve user (email or ID) to a user ID
-  const userId = args.user ? await resolveUserId(args.user) : null;
+  const userId = args.user ? await runAsSystem(() => resolveUserId(args.user)) : null;
   if (args.user && !userId) {
     return gracefulExit(1);
   }
@@ -730,16 +782,16 @@ async function gracefulExit(code = 0) {
   if (args.export && args.conversation) {
     console.purple('Export Single Conversation (UI-importable)');
     console.purple('---------------');
-    await exportSingleConversation(args.file, args.conversation);
+    await runAsSystem(() => exportSingleConversation(args.file, args.conversation));
   } else if (args.export) {
     console.purple('Bulk Export Conversations');
     console.purple('---------------');
     if (userId) {
       console.purple(`Filtering by user: ${userId}`);
     } else {
-      console.purple('Exporting all users\' conversations');
+      console.purple("Exporting all users' conversations");
     }
-    await exportConversations(args.file, userId, args['exclude-domain']);
+    await runAsSystem(() => exportConversations(args.file, userId, args['exclude-domain']));
   } else {
     console.purple('Bulk Import Conversations');
     console.purple('---------------');
@@ -756,9 +808,16 @@ async function gracefulExit(code = 0) {
       }
     }
 
-    const imported = await importConversations(filePaths, userId, {
-      groupByDomain: !args['no-projects'],
-    });
+    const targetUser = await runAsSystem(() => User.findById(userId).lean());
+    if (!targetUser) {
+      console.red(`Error: No user found with ID "${userId}".`);
+      console.yellow('Tip: Use "npm run list-users" to find valid users.');
+      return gracefulExit(1);
+    }
+
+    const imported = await runAsUserTenant(targetUser, () =>
+      importConversations(filePaths, targetUser, { groupByDomain: !args['no-projects'] }),
+    );
     if (!imported) {
       return gracefulExit(1);
     }
