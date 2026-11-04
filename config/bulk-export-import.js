@@ -278,7 +278,7 @@ function truncateToolCallOutputs(messages) {
       continue;
     }
     for (const part of msg.content) {
-      if (part.type !== 'tool_call' || !part.tool_call) {
+      if (!part || part.type !== 'tool_call' || !part.tool_call) {
         continue;
       }
       const tc = part.tool_call;
