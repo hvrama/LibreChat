@@ -59,6 +59,7 @@ jest.mock('openid-client', () => ({
 }));
 
 jest.mock('@librechat/data-schemas', () => ({
+  ...jest.requireActual('@librechat/data-schemas'),
   logger: mockLogger,
 }));
 
@@ -70,6 +71,7 @@ jest.mock('librechat-data-provider', () => ({
 }));
 
 jest.mock('@librechat/api', () => ({
+  ...jest.requireActual('@librechat/api'),
   buildOAuthFailureLog: (...args) => mockBuildOAuthFailureLog(...args),
   createOpenIDCallbackAuthenticator: (...args) => mockCreateOpenIDCallbackAuthenticator(...args),
   createSetBalanceConfig: jest.fn(() => (_req, _res, next) => next()),
@@ -77,10 +79,16 @@ jest.mock('@librechat/api', () => ({
   redirectToAuthFailure: (...args) => mockRedirectToAuthFailure(...args),
 }));
 
+const mockMarkOAuthNavigation = jest.fn((req, _res, next) => {
+  req.isOAuthNavigation = true;
+  next();
+});
+
 jest.mock('~/server/middleware', () => ({
   checkDomainAllowed: jest.fn((_req, _res, next) => next()),
   loginLimiter: jest.fn((_req, _res, next) => next()),
   logHeaders: jest.fn((_req, _res, next) => next()),
+  markOAuthNavigation: (...args) => mockMarkOAuthNavigation(...args),
 }));
 
 jest.mock('~/server/controllers/auth/oauth', () => ({
@@ -136,9 +144,19 @@ describe('OAuth route failure logging', () => {
     mockGetOAuthFailureMessage.mockClear();
     mockRedirectToAuthFailure.mockClear();
     mockPassportAuthenticate.mockClear();
+    mockMarkOAuthNavigation.mockClear();
     mockOpenIDCallbackAuthenticatorOptions = undefined;
     mockPassportAuthenticate.mockImplementation(() => (_req, _res, next) => next());
     mockOpenIDCallbackMiddleware.mockImplementation((_req, _res, next) => next());
+  });
+
+  it('marks OAuth requests as browser navigations so rejections can redirect', async () => {
+    const app = createApp();
+
+    await request(app).get('/oauth/openid/callback?code=secret-code').expect(204);
+
+    expect(mockMarkOAuthNavigation).toHaveBeenCalled();
+    expect(mockOAuthHandler.mock.calls[0][0].isOAuthNavigation).toBe(true);
   });
 
   it('wires the package OpenID callback middleware into the route', async () => {

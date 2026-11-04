@@ -4,7 +4,9 @@ import {
   Constants,
   isAgentsEndpoint,
   isEphemeralAgentId,
+  getEphemeralSender,
   encodeEphemeralAgentId,
+  resolveMCPAppsPolicy,
 } from 'librechat-data-provider';
 import type {
   AgentModelParameters,
@@ -14,27 +16,48 @@ import type {
   Agent,
 } from 'librechat-data-provider';
 import type { AppConfig } from '@librechat/data-schemas';
+import type { MCPClientCapabilityProfile } from '~/mcp/capabilities';
+import type { ParsedServerConfig } from '~/mcp/types';
+import {
+  requiresEphemeralUserConnection,
+  filterChatSelectableMCPServers,
+  validateMCPServerConfig,
+} from '~/mcp/utils';
 import { ASK_USER_QUESTION_TOOL_NAME } from '~/agents/hitl/askUserQuestionTool';
+import { resolveMCPClientCapabilityProfile } from '~/mcp/capabilities';
 import { synthesizeBackgroundToolOptions } from '~/agents/background';
 import { mergeSynthesizedToolOptions } from '~/agents/selection';
 import { synthesizeIntentToolOptions } from '~/agents/intent';
-import { requiresEphemeralUserConnection } from '~/mcp/utils';
+import { getLookupConcurrency } from '~/utils/concurrency';
 import { getCustomEndpointConfig } from '~/app/config';
+import { mapWithConcurrency } from '~/utils/promise';
 
 const { mcp_all, mcp_delimiter } = Constants;
 type ModelParametersWithPromptPrefix = AgentModelParameters & { promptPrefix?: string | null };
 
 export interface LoadAgentDeps {
-  getAgent: (searchParameter: { id: string }) => Promise<Agent | null>;
+  /** Resolves the agent without its `versions` history; `version` carries the count. */
+  getAgent: (searchParameter: {
+    id: string;
+  }) => Promise<(Agent & { version?: number; versions?: { length: number } }) | null>;
   getMCPServerTools: (
     userId: string,
     serverName: string,
+    serverConfig?: ParsedServerConfig,
+    capabilityProfile?: MCPClientCapabilityProfile,
   ) => Promise<Record<string, unknown> | null>;
+  /** The MCP servers this user can reach, with the registry's tier precedence
+   *  already applied — the resolution behind the client's catalog. Omitted, the
+   *  chat selection is used as sent. */
+  getAccessibleMCPServers?: (
+    userId: string,
+    role?: string,
+  ) => Promise<Record<string, ParsedServerConfig>>;
 }
 
 export interface LoadAgentParams {
   req: {
-    user?: { id?: string };
+    user?: { id?: string; role?: string };
     config?: AppConfig;
     body?: {
       promptPrefix?: string;
@@ -61,12 +84,31 @@ export async function loadEphemeralAgent(
     modelSpec = modelSpecs?.list?.find((s) => s.name === spec) ?? null;
   }
   const ephemeralAgent: TEphemeralAgent | undefined = req.body?.ephemeralAgent;
-  const mcpServers = new Set<string>(ephemeralAgent?.mcp);
   const userId = req.user?.id ?? '';
+  const capabilityProfile = resolveMCPClientCapabilityProfile(
+    resolveMCPAppsPolicy(req.config?.mcpSettings?.apps),
+  );
+  /** The picker's own selection is narrowed to what the picker may offer; a
+   *  spec's servers are the operator's choice and are added after, so pinning a
+   *  chat-hidden server to a spec keeps working. */
+  const mcpServers = new Set<string>(
+    await filterChatSelectableMCPServers(ephemeralAgent?.mcp, {
+      userId,
+      role: req.user?.role,
+      getAccessibleMCPServers: deps.getAccessibleMCPServers,
+    }),
+  );
   if (modelSpec?.mcpServers) {
     for (const mcpServer of modelSpec.mcpServers) {
       mcpServers.add(mcpServer);
     }
+  }
+  /** Publish the servers this request will actually use back onto the body. The
+   *  instruction path reads `req.body.ephemeralAgent.mcp` directly and prefers
+   *  it over the agent's tools, so it would otherwise both inject a hidden
+   *  server's `serverInstructions` and omit a spec-pinned server's. */
+  if (ephemeralAgent != null && Array.isArray(ephemeralAgent.mcp)) {
+    ephemeralAgent.mcp = [...mcpServers];
   }
   const tools: string[] = [];
   if (ephemeralAgent?.execute_code === true || modelSpec?.executeCode === true) {
@@ -88,26 +130,26 @@ export async function loadEphemeralAgent(
     tools.push(ASK_USER_QUESTION_TOOL_NAME);
   }
 
-  const addedServers = new Set<string>();
   if (mcpServers.size > 0) {
-    for (const mcpServer of mcpServers) {
-      if (addedServers.has(mcpServer)) {
-        continue;
-      }
-      /** Request-tier overlays are invisible to the cache service's registry
-       *  resolver — overlay-scoped servers expand fresh via `mcp_all` instead */
-      const overlayConfig = req.config?.mcpConfig?.[mcpServer];
-      const serverTools =
-        overlayConfig && requiresEphemeralUserConnection(overlayConfig)
-          ? null
-          : await deps.getMCPServerTools(userId, mcpServer);
-      if (!serverTools) {
-        tools.push(`${mcp_all}${mcp_delimiter}${mcpServer}`);
-        addedServers.add(mcpServer);
-        continue;
-      }
-      tools.push(...Object.keys(serverTools));
-      addedServers.add(mcpServer);
+    const serverToolKeys = await mapWithConcurrency(
+      [...mcpServers],
+      getLookupConcurrency(req.config, 'mcpCatalogLookups'),
+      async (mcpServer): Promise<string[]> => {
+        /** Address durable catalogs by the effective request overlay; request-scoped
+         *  overlays still expand fresh through `mcp_all`. */
+        const rawOverlayConfig = req.config?.mcpConfig?.[mcpServer];
+        const overlayConfig = rawOverlayConfig
+          ? validateMCPServerConfig(rawOverlayConfig)
+          : undefined;
+        const serverTools =
+          overlayConfig && requiresEphemeralUserConnection(overlayConfig)
+            ? null
+            : await deps.getMCPServerTools(userId, mcpServer, overlayConfig, capabilityProfile);
+        return serverTools ? Object.keys(serverTools) : [`${mcp_all}${mcp_delimiter}${mcpServer}`];
+      },
+    );
+    for (const keys of serverToolKeys) {
+      tools.push(...keys);
     }
   }
 
@@ -129,19 +171,18 @@ export async function loadEphemeralAgent(
     }
   }
 
-  // For ephemeral agents, use modelLabel if provided, then model spec's label,
-  // then modelDisplayLabel from endpoint config, otherwise empty string to show model name
-  const sender =
-    (model_parameters as AgentModelParameters & { modelLabel?: string })?.modelLabel ??
-    modelSpec?.label ??
-    (endpointConfig as { modelDisplayLabel?: string } | undefined)?.modelDisplayLabel ??
-    '';
+  const sender = getEphemeralSender({
+    modelLabel: (model_parameters as AgentModelParameters & { modelLabel?: string })?.modelLabel,
+    specLabel: modelSpec?.label,
+    modelDisplayLabel: (endpointConfig as { modelDisplayLabel?: string } | undefined)
+      ?.modelDisplayLabel,
+  });
 
   // Encode ephemeral agent ID with endpoint, model, and computed sender for display
   const ephemeralId = encodeEphemeralAgentId({
     endpoint,
     model: model as string,
-    sender: sender as string,
+    sender,
   });
 
   const result: Partial<Agent> = {
@@ -210,8 +251,6 @@ export async function loadAgent(
     return null;
   }
 
-  // Set version count from versions array length
-  const agentWithVersion = agent as Agent & { versions?: unknown[]; version?: number };
-  agentWithVersion.version = agentWithVersion.versions ? agentWithVersion.versions.length : 0;
+  agent.version ??= agent.versions?.length ?? 0;
   return agent;
 }

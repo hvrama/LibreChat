@@ -1,30 +1,44 @@
+import { getBranchSiblingIndexesForTarget } from '@librechat/chat';
+import { QueryKeys, Constants, buildTree, ContentTypes } from 'librechat-data-provider';
 import {
-  QueryKeys,
-  Constants,
-  buildTree,
-  ContentTypes,
-  isEphemeralAgentId,
-  appendAgentIdSuffix,
-  encodeEphemeralAgentId,
-} from 'librechat-data-provider';
-import type {
-  TMessage,
-  TConversation,
-  TEndpointsConfig,
-  TMessageContentParts,
-} from 'librechat-data-provider';
+  getPartKeyIndex,
+  isEmptyContentPart,
+  hasStreamStartFailed,
+  stripStreamedIndexStamps,
+  createDualMessageContent,
+  preserveStreamedContentIdentity,
+  STREAM_START_FAILED_METADATA_KEY,
+} from '@librechat/chat';
+import type { TMessage, TMessageContentParts } from 'librechat-data-provider';
+import type { BranchSiblingIndex } from '@librechat/chat';
 import type { QueryClient } from '@tanstack/react-query';
 import type { LocalizeFunction, TMessageProps } from '~/common';
 
+export {
+  getPartKeyIndex,
+  isEmptyContentPart,
+  hasStreamStartFailed,
+  stripStreamedIndexStamps,
+  createDualMessageContent,
+  preserveStreamedContentIdentity,
+  STREAM_START_FAILED_METADATA_KEY,
+};
 export const TEXT_KEY_DIVIDER = '|||';
-export const STREAM_START_FAILED_METADATA_KEY = 'streamStartFailed';
+
+/** A locally submitted user row is not canonical until the server acknowledges it. */
+export function isUnacknowledgedUserMessage(message: TMessage): boolean {
+  return (
+    message.isCreatedByUser === true &&
+    message.clientTimestamp != null &&
+    message.createdAt == null &&
+    !message.privacyRevision
+  );
+}
+
+export { getBranchSiblingIndexesForTarget };
+export type { BranchSiblingIndex };
 
 type SiblingIndexLookup = (parentMessageId: string | null | undefined) => number;
-
-export type BranchSiblingIndex = {
-  parentMessageId: string | null | undefined;
-  siblingIdx: number;
-};
 
 export const selectActiveBranchTail = (
   messages: TMessage[] | null | undefined,
@@ -67,74 +81,22 @@ export const getMessageBranchSiblingParentIds = (
   }
 
   const parentIds = new Set<string | null>();
-  const collectBranchParents = (
-    siblings: TMessage[] | undefined,
-    parentMessageId: string | null | undefined,
-  ) => {
-    if (!siblings?.length) {
-      return;
+  const stack = [{ siblings: messagesTree, parentMessageId: rootSiblingKey, index: 0 }];
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame.index === 0 && frame.siblings.length > 1) {
+      parentIds.add(frame.parentMessageId ?? null);
     }
-
-    if (siblings.length > 1) {
-      parentIds.add(parentMessageId ?? null);
+    const message = frame.siblings[frame.index++];
+    if (!message) {
+      stack.pop();
+      continue;
     }
-
-    for (const message of siblings) {
-      collectBranchParents(message.children, message.messageId);
+    if (message.children?.length) {
+      stack.push({ siblings: message.children, parentMessageId: message.messageId, index: 0 });
     }
-  };
-
-  collectBranchParents(messagesTree, rootSiblingKey);
+  }
   return Array.from(parentIds);
-};
-
-export const getBranchSiblingIndexesForTarget = (
-  messages: TMessage[] | null | undefined,
-  targetMessageId: string | null | undefined,
-  rootSiblingKey: string | null | undefined,
-): BranchSiblingIndex[] => {
-  if (!targetMessageId) {
-    return [];
-  }
-
-  const messagesTree = buildTree({ messages: messages ?? null });
-  if (!messagesTree?.length) {
-    return [];
-  }
-
-  const branchIndexes: BranchSiblingIndex[] = [];
-  const findTargetPath = (
-    siblings: TMessage[] | undefined,
-    parentMessageId: string | null | undefined,
-  ): boolean => {
-    if (!siblings?.length) {
-      return false;
-    }
-
-    for (let index = 0; index < siblings.length; index++) {
-      const message = siblings[index];
-      if (!message) {
-        continue;
-      }
-
-      const isTarget = message.messageId === targetMessageId;
-      const childHasTarget = findTargetPath(message.children, message.messageId);
-      if (isTarget || childHasTarget) {
-        if (siblings.length > 1) {
-          branchIndexes.unshift({
-            parentMessageId,
-            siblingIdx: siblings.length - index - 1,
-          });
-        }
-        return true;
-      }
-    }
-
-    return false;
-  };
-
-  findTargetPath(messagesTree, rootSiblingKey);
-  return branchIndexes;
 };
 
 export const getLatestText = (message?: TMessage | null, includeIndex?: boolean): string => {
@@ -191,8 +153,7 @@ export const getAllContentText = (message?: TMessage | null): string => {
   return '';
 };
 
-export const hasStreamStartFailed = (message?: Pick<TMessage, 'metadata'> | null): boolean =>
-  message?.metadata?.[STREAM_START_FAILED_METADATA_KEY] === true;
+export { isSubmittableMessage } from '@librechat/chat';
 
 export const markStreamStartFailedMetadata = (
   metadata?: TMessage['metadata'],
@@ -200,86 +161,6 @@ export const markStreamStartFailedMetadata = (
   ...(metadata ?? {}),
   [STREAM_START_FAILED_METADATA_KEY]: true,
 });
-
-const getLatestContentForKey = (message: TMessage): string => {
-  const formatText = (str: string, index: number): string => {
-    if (str.length === 0) {
-      return '0';
-    }
-    const length = str.length;
-    const lastChars = str.slice(-16);
-    return `${length}${TEXT_KEY_DIVIDER}${lastChars}${TEXT_KEY_DIVIDER}${index}`;
-  };
-
-  if (message.text) {
-    return formatText(message.text, -1);
-  }
-
-  if (!message.content || message.content.length === 0) {
-    return '';
-  }
-
-  for (let i = message.content.length - 1; i >= 0; i--) {
-    const part = message.content[i] as TMessageContentParts | undefined;
-    if (!part?.type) {
-      continue;
-    }
-
-    const type = part.type;
-    let text = '';
-
-    // Handle THINK type - extract think content
-    if (type === ContentTypes.THINK && 'think' in part) {
-      text = typeof part.think === 'string' ? part.think : (part.think?.value ?? '');
-    }
-    // Handle TEXT type
-    else if (type === ContentTypes.TEXT && 'text' in part) {
-      text = typeof part.text === 'string' ? part.text : (part.text?.value ?? '');
-    }
-    // Handle ERROR type
-    else if (type === ContentTypes.ERROR && 'error' in part) {
-      text = String(part.error || 'err').slice(0, 30);
-    }
-    // Handle TOOL_CALL - use simple marker with type
-    else if (type === ContentTypes.TOOL_CALL && 'tool_call' in part) {
-      const tcType = part.tool_call?.type || 'x';
-      const tcName = String(part.tool_call?.['name'] || 'unknown').slice(0, 20);
-      const tcArgs = String(part.tool_call?.['args'] || 'none').slice(0, 20);
-      const tcOutput = String(part.tool_call?.['output'] || 'none').slice(0, 20);
-      text = `tc_${tcType}_${tcName}_${tcArgs}_${tcOutput}`;
-    }
-    // Handle IMAGE_FILE - use simple marker with file_id suffix
-    else if (type === ContentTypes.IMAGE_FILE && 'image_file' in part) {
-      const fileId = part.image_file?.file_id || 'x';
-      text = `if_${fileId.slice(-8)}`;
-    }
-    // Handle IMAGE_URL - use simple marker
-    else if (type === ContentTypes.IMAGE_URL) {
-      text = 'iu';
-    }
-    // Handle AGENT_UPDATE - use simple marker with agentId suffix
-    else if (type === ContentTypes.AGENT_UPDATE && 'agent_update' in part) {
-      const agentId = String(part.agent_update?.agentId || 'x').slice(0, 30);
-      text = `au_${agentId}`;
-    } else {
-      text = type;
-    }
-
-    if (text.length > 0) {
-      return formatText(text, i);
-    }
-  }
-
-  return '';
-};
-
-export const getTextKey = (message?: TMessage | null, convoId?: string | null) => {
-  if (!message) {
-    return '';
-  }
-  const contentKey = getLatestContentForKey(message);
-  return `${(message.messageId as string | null) ?? ''}${TEXT_KEY_DIVIDER}${contentKey}${TEXT_KEY_DIVIDER}${message.conversationId ?? convoId}`;
-};
 
 export const scrollToEnd = (callback?: () => void) => {
   const messagesEndElement = document.getElementById('messages-end');
@@ -312,12 +193,13 @@ export const clearMessagesCache = (
   queryClient.setQueryData<TMessage[]>([QueryKeys.messages, Constants.NEW_CONVO], []);
 };
 
-/** Removes a deleted conversation's message cache and any matching new-chat cache alias. */
-export const clearDeletedConversationMessagesCache = (
-  queryClient: QueryClient,
-  conversationId: string,
-): void => {
-  const deletedMessages = queryClient.getQueryData<TMessage[]>([
+/**
+ * True while the new-chat cache still holds the given conversation's messages: a chat's first
+ * turn writes the same array under both keys, so the alias survives until it is reset. The
+ * reference check covers the window before the messages carry their conversation ID.
+ */
+const newConversationCacheAliases = (queryClient: QueryClient, conversationId: string): boolean => {
+  const conversationMessages = queryClient.getQueryData<TMessage[]>([
     QueryKeys.messages,
     conversationId,
   ]);
@@ -325,14 +207,40 @@ export const clearDeletedConversationMessagesCache = (
     QueryKeys.messages,
     Constants.NEW_CONVO,
   ]);
-  const newConversationAliasesDeleted =
+
+  return (
     newConversationMessages != null &&
-    (newConversationMessages === deletedMessages ||
-      newConversationMessages.some((message) => message.conversationId === conversationId));
+    (newConversationMessages === conversationMessages ||
+      newConversationMessages.some((message) => message.conversationId === conversationId))
+  );
+};
+
+/** Removes a deleted conversation's message cache and any matching new-chat cache alias. */
+export const clearDeletedConversationMessagesCache = (
+  queryClient: QueryClient,
+  conversationId: string,
+): void => {
+  const newConversationAliasesDeleted = newConversationCacheAliases(queryClient, conversationId);
 
   queryClient.removeQueries([QueryKeys.messages, conversationId], { exact: true });
 
   if (!newConversationAliasesDeleted) {
+    return;
+  }
+
+  queryClient.setQueryData<TMessage[]>([QueryKeys.messages, Constants.NEW_CONVO], []);
+};
+
+/**
+ * Drops the new-chat alias of a conversation that was just archived, so returning to a new chat
+ * does not keep rendering it. Its own history stays cached: unlike a deleted chat, an archived
+ * one can still be reopened from the archive.
+ */
+export const clearArchivedConversationMessagesCache = (
+  queryClient: QueryClient,
+  conversationId: string,
+): void => {
+  if (!newConversationCacheAliases(queryClient, conversationId)) {
     return;
   }
 
@@ -369,189 +277,8 @@ export const getHeaderPrefixForScreenReader = (
     : `${localize('com_ui_response')}${suffix}: `;
 };
 
-export type MessageTimestamp = {
-  /** Localized relative time, e.g. "2 hours ago". */
-  relative: string;
-  /** Localized absolute date and time, e.g. "Jun 12, 2026, 3:42 PM". */
-  absolute: string;
-  /** ISO 8601 string for the `<time>` element's `dateTime` attribute. */
-  iso: string;
-  /**
-   * True when the message is recent enough that the relative form ("10 minutes ago")
-   * reads better than the absolute date. Past this window the absolute date is clearer.
-   */
-  isRecent: boolean;
-};
-
-/** Below this age the relative form is preferred over the absolute date. */
-const RECENT_THRESHOLD_MS = 24 * 60 * 60 * 1000;
-
-/** Returns true when `value` parses to a valid date. */
-export const isValidTimestamp = (value?: string | null): value is string => {
-  if (!value) {
-    return false;
-  }
-  return !Number.isNaN(new Date(value).getTime());
-};
-
-const RELATIVE_TIME_DIVISIONS: { amount: number; unit: Intl.RelativeTimeFormatUnit }[] = [
-  { amount: 60, unit: 'second' },
-  { amount: 60, unit: 'minute' },
-  { amount: 24, unit: 'hour' },
-  { amount: 7, unit: 'day' },
-  { amount: 4.34524, unit: 'week' },
-  { amount: 12, unit: 'month' },
-  { amount: Number.POSITIVE_INFINITY, unit: 'year' },
-];
-
-/** Returns the locale only when it is a syntactically valid BCP-47 tag, else undefined. */
-const resolveLocale = (locale?: string): string | undefined => {
-  if (!locale) {
-    return undefined;
-  }
-  try {
-    Intl.DateTimeFormat.supportedLocalesOf(locale);
-    return locale;
-  } catch {
-    return undefined;
-  }
-};
-
-const formatRelativeTime = (from: Date, to: Date, locale?: string): string => {
-  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
-  let duration = (from.getTime() - to.getTime()) / 1000;
-  for (const division of RELATIVE_TIME_DIVISIONS) {
-    if (Math.abs(duration) < division.amount) {
-      return formatter.format(Math.round(duration), division.unit);
-    }
-    duration /= division.amount;
-  }
-  return formatter.format(Math.round(duration), 'year');
-};
-
-/**
- * Formats a message timestamp into locale-aware relative and absolute strings.
- * Returns null when the value is missing or unparseable, so callers can skip
- * rendering the timestamp entirely.
- */
-export const getMessageTimestamp = (
-  value?: string | null,
-  locale?: string,
-): MessageTimestamp | null => {
-  if (!isValidTimestamp(value)) {
-    return null;
-  }
-
-  const date = new Date(value);
-  const now = new Date(Date.now());
-  const safeLocale = resolveLocale(locale);
-
-  return {
-    iso: date.toISOString(),
-    relative: formatRelativeTime(date, now, safeLocale),
-    absolute: new Intl.DateTimeFormat(safeLocale, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    }).format(date),
-    isRecent: Math.abs(now.getTime() - date.getTime()) < RECENT_THRESHOLD_MS,
-  };
-};
-
-/**
- * Creates initial content parts for dual message display with agent-based grouping.
- * Sets up primary and added agent content parts with agentId for column rendering.
- *
- * @param primaryConvo - The primary conversation configuration
- * @param addedConvo - The added conversation configuration
- * @param endpointsConfig - Endpoints configuration for getting model display labels
- * @param modelSpecs - Model specs list for getting spec labels
- * @returns Array of content parts with agentId for side-by-side rendering
- */
-export const createDualMessageContent = (
-  primaryConvo: TConversation,
-  addedConvo: TConversation,
-  endpointsConfig?: TEndpointsConfig,
-  modelSpecs?: { name: string; label?: string }[],
-): TMessageContentParts[] => {
-  // For real agents (agent_id starts with "agent_"), use agent_id directly
-  // Otherwise create ephemeral ID from endpoint/model
-  let primaryAgentId: string;
-  if (primaryConvo.agent_id && !isEphemeralAgentId(primaryConvo.agent_id)) {
-    primaryAgentId = primaryConvo.agent_id;
-  } else {
-    const primaryEndpoint = primaryConvo.endpoint;
-    const primaryModel = primaryConvo.model ?? '';
-    // Look up model spec for label fallback
-    const primarySpec =
-      primaryConvo.spec != null && primaryConvo.spec !== ''
-        ? modelSpecs?.find((s) => s.name === primaryConvo.spec)
-        : undefined;
-    // For ephemeral agents, use modelLabel if provided, then model spec's label,
-    // then modelDisplayLabel from endpoint config, otherwise empty string to show model name
-    const primarySender =
-      primaryConvo.modelLabel ??
-      primarySpec?.label ??
-      (primaryEndpoint ? endpointsConfig?.[primaryEndpoint]?.modelDisplayLabel : undefined) ??
-      '';
-    primaryAgentId = encodeEphemeralAgentId({
-      endpoint: primaryEndpoint ?? '',
-      model: primaryModel,
-      sender: primarySender,
-    });
-  }
-
-  // Both agents run in parallel, so they share the same groupId
-  const parallelGroupId = 1;
-
-  // Use empty type - these are just placeholders to establish agentId/groupId
-  // The actual type will be set when real content arrives from the server
-  const primaryContent = {
-    type: '' as const,
-    agentId: primaryAgentId,
-    groupId: parallelGroupId,
-  };
-
-  // For added agent, use agent_id if it's a real agent (starts with "agent_")
-  // Otherwise create ephemeral ID with index suffix
-  // Always append index suffix for added agent to distinguish from primary (even if same agent_id)
-  let addedAgentId: string;
-  if (addedConvo.agent_id && !isEphemeralAgentId(addedConvo.agent_id)) {
-    // Append suffix to distinguish from primary agent (matches ephemeral format)
-    addedAgentId = appendAgentIdSuffix(addedConvo.agent_id, 1);
-  } else {
-    const addedEndpoint = addedConvo.endpoint;
-    const addedModel = addedConvo.model ?? '';
-    // Look up model spec for label fallback
-    const addedSpec =
-      addedConvo.spec != null && addedConvo.spec !== ''
-        ? modelSpecs?.find((s) => s.name === addedConvo.spec)
-        : undefined;
-    // For ephemeral agents, use modelLabel if provided, then model spec's label,
-    // then modelDisplayLabel from endpoint config, otherwise empty string to show model name
-    const addedSender =
-      addedConvo.modelLabel ??
-      addedSpec?.label ??
-      (addedEndpoint ? endpointsConfig?.[addedEndpoint]?.modelDisplayLabel : undefined) ??
-      '';
-    addedAgentId = encodeEphemeralAgentId({
-      endpoint: addedEndpoint ?? '',
-      model: addedModel,
-      sender: addedSender,
-      index: 1,
-    });
-  }
-
-  // Use empty type - placeholder to establish agentId/groupId
-  const addedContent = {
-    type: '' as const,
-    agentId: addedAgentId,
-    groupId: parallelGroupId,
-  };
-
-  // Cast through unknown since these are placeholder objects with empty type
-  // that will be replaced by real content with proper types from the server
-  return [primaryContent, addedContent] as unknown as TMessageContentParts[];
-};
+export { isValidTimestamp, getMessageTimestamp } from '@librechat/chat/components';
+export type { MessageTimestamp } from '@librechat/chat/components';
 
 export function areMessageFilesEqual(prevFiles?: TMessage['files'], nextFiles?: TMessage['files']) {
   if (prevFiles === nextFiles) {
@@ -587,11 +314,16 @@ export function areMessageFieldsEqual(
   return (
     prevMsg.messageId === nextMsg.messageId &&
     prevMsg.text === nextMsg.text &&
+    prevMsg.privacyRevision === nextMsg.privacyRevision &&
     prevMsg.error === nextMsg.error &&
     prevMsg.unfinished === nextMsg.unfinished &&
+    /** Read by the row: `useGenerationsByLatest` gates the Continue button on it and
+     *  `ContentRender` renders the tool-call-limit notice from it. */
+    prevMsg.finish_reason === nextMsg.finish_reason &&
     prevMsg.createdAt === nextMsg.createdAt &&
     prevMsg.depth === nextMsg.depth &&
     prevMsg.isCreatedByUser === nextMsg.isCreatedByUser &&
+    prevMsg.isUserSubmitted === nextMsg.isUserSubmitted &&
     (prevMsg.children?.length ?? 0) === (nextMsg.children?.length ?? 0) &&
     prevMsg.content === nextMsg.content &&
     prevMsg.model === nextMsg.model &&
@@ -603,6 +335,28 @@ export function areMessageFieldsEqual(
     (prevMsg.manualSkills?.length ?? 0) === (nextMsg.manualSkills?.length ?? 0) &&
     (prevMsg.alwaysAppliedSkills?.length ?? 0) === (nextMsg.alwaysAppliedSkills?.length ?? 0) &&
     (prevMsg.quotes?.length ?? 0) === (nextMsg.quotes?.length ?? 0)
+  );
+}
+
+type TailRelationProps = {
+  message?: TMessage | null;
+  latestMessageId?: string;
+  latestMessageDepth?: number;
+};
+
+/**
+ * True when moving the thread's tail leaves a row's rendering unchanged. Rows read
+ * `latestMessageId` and `latestMessageDepth` only by comparing them to their own id
+ * and depth, and for whether a tail is known at all, so a submission or a server id
+ * hydration re-renders just the rows entering or leaving the tail.
+ */
+export function isSameTailRelation(prev: TailRelationProps, next: TailRelationProps): boolean {
+  return (
+    (prev.latestMessageId == null) === (next.latestMessageId == null) &&
+    (prev.latestMessageId === prev.message?.messageId) ===
+      (next.latestMessageId === next.message?.messageId) &&
+    (prev.latestMessageDepth === prev.message?.depth) ===
+      (next.latestMessageDepth === next.message?.depth)
   );
 }
 

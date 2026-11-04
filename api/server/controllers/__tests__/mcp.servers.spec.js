@@ -24,11 +24,17 @@ jest.mock('~/server/services/GraphApiService', () => ({
 
 const mockRegistryInstance = {
   getServerConfig: jest.fn(),
+  inspectServerUpdate: jest.fn(),
+  commitServerUpdate: jest.fn(),
+  updateServer: jest.fn(),
+  removeServer: jest.fn(),
+  resolveAllowlists: jest.fn(),
 };
+const mockMcpManager = { disconnectUserConnection: jest.fn() };
 
 jest.mock('~/config', () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
-  getMCPManager: jest.fn(),
+  getMCPManager: jest.fn(() => mockMcpManager),
   getMCPServersRegistry: jest.fn(() => mockRegistryInstance),
 }));
 
@@ -41,10 +47,18 @@ jest.mock('~/server/services/MCP', () => ({
 
 jest.mock('~/server/services/Config', () => ({
   cacheMCPServerTools: jest.fn(),
+  getMCPToolsCacheGeneration: jest.fn().mockResolvedValue('test-generation'),
   getMCPServerTools: jest.fn(),
+  invalidateCachedTools: jest.fn(),
 }));
 
-const { getMCPServersList, getMCPServerById } = require('~/server/controllers/mcp');
+const mockMaybeUninstallOAuthMCP = jest.fn();
+const {
+  getMCPServersList,
+  getMCPServerById,
+  updateMCPServerController,
+  deleteMCPServerController,
+} = require('~/server/controllers/mcp');
 const { grantPermission } = require('~/server/services/PermissionService');
 const { seedDefaultRoles } = require('~/models');
 
@@ -108,6 +122,21 @@ beforeEach(async () => {
   await User.deleteMany({});
   mockResolveAllMcpConfigs.mockReset();
   mockRegistryInstance.getServerConfig.mockReset();
+  mockRegistryInstance.inspectServerUpdate.mockReset();
+  mockRegistryInstance.commitServerUpdate.mockReset();
+  mockRegistryInstance.updateServer.mockReset();
+  mockRegistryInstance.removeServer.mockReset();
+  mockRegistryInstance.resolveAllowlists.mockReset().mockResolvedValue({
+    allowedDomains: ['https://oauth.example.com'],
+    allowedAddresses: null,
+  });
+  mockMcpManager.disconnectUserConnection.mockReset().mockResolvedValue(undefined);
+  mockMaybeUninstallOAuthMCP.mockReset().mockResolvedValue(undefined);
+  const cacheService = require('~/server/services/Config');
+  cacheService.invalidateCachedTools.mockReset().mockResolvedValue(undefined);
+  cacheService.getMCPServerTools.mockReset().mockResolvedValue({ retained: {} });
+  cacheService.getMCPToolsCacheGeneration.mockReset().mockResolvedValue('restored-generation');
+  cacheService.cacheMCPServerTools.mockReset().mockResolvedValue(undefined);
   existsSpy = jest.spyOn(SystemGrant, 'exists');
 });
 
@@ -161,6 +190,24 @@ describe('getMCPServersList', () => {
     expect(res.json).toHaveBeenCalledWith({});
   });
 
+  it('exposes safe request-scoped metadata while redacting placeholder-bearing fields', async () => {
+    const reqUser = await createUser();
+    mockResolveAllMcpConfigs.mockResolvedValue({
+      runtimeServer: {
+        ...yamlConfig,
+        headers: { 'X-Conversation': '{{LIBRECHAT_BODY_CONVERSATIONID}}' },
+      },
+    });
+
+    const res = createRes();
+    await getMCPServersList({ user: reqUser }, res);
+
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.runtimeServer.requestScoped).toBe(true);
+    expect(payload.runtimeServer.url).toBeUndefined();
+    expect(payload.runtimeServer.headers).toBeUndefined();
+  });
+
   it('applies the capability bypass to all servers when a DB-backed server is present', async () => {
     await seedManageMcpGrant();
     const reqUser = await createUser(SystemRoles.ADMIN);
@@ -202,6 +249,51 @@ describe('getMCPServersList', () => {
     const payload = res.json.mock.calls[0][0];
     expect(payload.dbServer.url).toBe('https://user.example.com/mcp');
     expect(payload.yamlServer.url).toBeUndefined();
+  });
+
+  it('never returns an admin-stored credential, its ciphertext or its preview', async () => {
+    await seedManageMcpGrant();
+    const reqUser = await createUser(SystemRoles.ADMIN);
+    const ciphertext = 'v3:0123456789abcdef0123456789abcdef:feedface';
+    mockResolveAllMcpConfigs.mockResolvedValue({
+      dbServer: createDbConfig(new mongoose.Types.ObjectId()),
+      configServer: {
+        type: 'streamable-http',
+        url: 'https://config.example.com/mcp',
+        title: 'Config Server',
+        source: 'config',
+        apiKey: {
+          source: 'admin',
+          authorization_type: 'bearer',
+          key: 'sk-decrypted-admin-key',
+          keyPreview: '...-key',
+        },
+        oauth: {
+          client_id: 'client-id',
+          client_secret: ciphertext,
+          client_secretPreview: '...face',
+          authorization_url: 'https://config.example.com/auth',
+          token_url: 'https://config.example.com/token',
+        },
+      },
+    });
+
+    const res = createRes();
+    await getMCPServersList({ user: reqUser }, res);
+
+    const payload = res.json.mock.calls[0][0];
+    /** The manager sees the destination, never the credential. */
+    expect(payload.configServer.url).toBe('https://config.example.com/mcp');
+    expect(payload.configServer.apiKey).toEqual({ source: 'admin', authorization_type: 'bearer' });
+    expect(payload.configServer.oauth).toEqual({
+      client_id: 'client-id',
+      authorization_url: 'https://config.example.com/auth',
+      token_url: 'https://config.example.com/token',
+    });
+    const body = JSON.stringify(payload);
+    for (const secret of ['sk-decrypted-admin-key', '...-key', ciphertext, '...face']) {
+      expect(body).not.toContain(secret);
+    }
   });
 
   it('leaves DB-backed servers redacted for viewer-only ACL', async () => {
@@ -254,5 +346,331 @@ describe('getMCPServerById', () => {
     const payload = res.json.mock.calls[0][0];
     expect(payload.url).toBeUndefined();
     expect(payload.oauth.authorization_url).toBeUndefined();
+  });
+});
+
+describe('DB-backed server mutation fencing', () => {
+  const updatedConfig = {
+    type: 'streamable-http',
+    url: 'https://updated.example.com/mcp',
+    source: 'user',
+  };
+
+  it('inspects, fences, commits, fences cross-replica creations, and disconnects', async () => {
+    const user = await createUser();
+    mockRegistryInstance.getServerConfig.mockResolvedValue(
+      createDbConfig(new mongoose.Types.ObjectId()),
+    );
+    mockRegistryInstance.inspectServerUpdate.mockResolvedValue(updatedConfig);
+    mockRegistryInstance.commitServerUpdate.mockResolvedValue(updatedConfig);
+    const res = createRes();
+
+    await updateMCPServerController(
+      { user, params: { serverName: 'github' }, body: { config: updatedConfig } },
+      res,
+    );
+
+    const { invalidateCachedTools } = require('~/server/services/Config');
+    expect(invalidateCachedTools).toHaveBeenCalledWith({ userId: user.id, serverName: 'github' });
+    expect(invalidateCachedTools).toHaveBeenCalledTimes(2);
+    expect(mockMcpManager.disconnectUserConnection).toHaveBeenCalledWith(user.id, 'github');
+    expect(mockRegistryInstance.inspectServerUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      invalidateCachedTools.mock.invocationCallOrder[0],
+    );
+    expect(invalidateCachedTools.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRegistryInstance.commitServerUpdate.mock.invocationCallOrder[0],
+    );
+    expect(mockRegistryInstance.commitServerUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      invalidateCachedTools.mock.invocationCallOrder[1],
+    );
+    expect(invalidateCachedTools.mock.invocationCallOrder[1]).toBeLessThan(
+      mockMcpManager.disconnectUserConnection.mock.invocationCallOrder[0],
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+    /** The OBO lockdown checks the stored server, which a profile hide must not bypass. */
+    expect(mockRegistryInstance.getServerConfig).toHaveBeenCalledWith(
+      'github',
+      user.id,
+      undefined,
+      undefined,
+      { includeHidden: true },
+    );
+  });
+
+  it('does not fence the valid catalog when update inspection or persistence fails', async () => {
+    const user = await createUser();
+    const updateError = new Error('inspection failed');
+    mockRegistryInstance.getServerConfig.mockResolvedValue(
+      createDbConfig(new mongoose.Types.ObjectId()),
+    );
+    mockRegistryInstance.inspectServerUpdate.mockRejectedValue(updateError);
+    const res = createRes();
+
+    await updateMCPServerController(
+      { user, params: { serverName: 'github' }, body: { config: updatedConfig } },
+      res,
+    );
+
+    expect(require('~/server/services/Config').invalidateCachedTools).not.toHaveBeenCalled();
+    expect(mockRegistryInstance.commitServerUpdate).not.toHaveBeenCalled();
+    expect(mockMcpManager.disconnectUserConnection).not.toHaveBeenCalled();
+    expect(mockMaybeUninstallOAuthMCP).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('does not commit an inspected update when the distributed fence fails', async () => {
+    const user = await createUser();
+    mockRegistryInstance.getServerConfig.mockResolvedValue(
+      createDbConfig(new mongoose.Types.ObjectId()),
+    );
+    mockRegistryInstance.inspectServerUpdate.mockResolvedValue(updatedConfig);
+    require('~/server/services/Config').invalidateCachedTools.mockRejectedValue(
+      new Error('Redis unavailable'),
+    );
+    const res = createRes();
+
+    await updateMCPServerController(
+      { user, params: { serverName: 'github' }, body: { config: updatedConfig } },
+      res,
+    );
+
+    expect(mockMcpManager.disconnectUserConnection).not.toHaveBeenCalled();
+    expect(mockMaybeUninstallOAuthMCP).not.toHaveBeenCalled();
+    expect(mockRegistryInstance.commitServerUpdate).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('restores the retained catalog when update persistence fails after fencing', async () => {
+    const user = await createUser();
+    const existingConfig = createDbConfig(new mongoose.Types.ObjectId());
+    const retainedTools = { retained: { function: { name: 'retained' } } };
+    mockRegistryInstance.getServerConfig.mockResolvedValue(existingConfig);
+    mockRegistryInstance.inspectServerUpdate.mockResolvedValue(updatedConfig);
+    mockRegistryInstance.commitServerUpdate.mockRejectedValue(new Error('database unavailable'));
+    require('~/server/services/Config').getMCPServerTools.mockResolvedValue(retainedTools);
+    const res = createRes();
+
+    await updateMCPServerController(
+      { user, params: { serverName: 'github' }, body: { config: updatedConfig } },
+      res,
+    );
+
+    expect(require('~/server/services/Config').cacheMCPServerTools).toHaveBeenCalledWith({
+      userId: user.id,
+      serverName: 'github',
+      serverConfig: existingConfig,
+      serverTools: retainedTools,
+      publicationGeneration: 'restored-generation',
+    });
+    expect(mockMcpManager.disconnectUserConnection).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('continues an update when only local disconnect cleanup fails', async () => {
+    const user = await createUser();
+    mockRegistryInstance.getServerConfig.mockResolvedValue(
+      createDbConfig(new mongoose.Types.ObjectId()),
+    );
+    mockMcpManager.disconnectUserConnection.mockRejectedValue(new Error('dispose failed'));
+    mockRegistryInstance.inspectServerUpdate.mockResolvedValue(updatedConfig);
+    mockRegistryInstance.commitServerUpdate.mockResolvedValue(updatedConfig);
+    const res = createRes();
+
+    await updateMCPServerController(
+      { user, params: { serverName: 'github' }, body: { config: updatedConfig } },
+      res,
+    );
+
+    expect(mockRegistryInstance.commitServerUpdate).toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('retries a transient post-commit fence failure before returning success', async () => {
+    const user = await createUser();
+    mockRegistryInstance.getServerConfig.mockResolvedValue(
+      createDbConfig(new mongoose.Types.ObjectId()),
+    );
+    mockRegistryInstance.inspectServerUpdate.mockResolvedValue(updatedConfig);
+    mockRegistryInstance.commitServerUpdate.mockResolvedValue(updatedConfig);
+    require('~/server/services/Config')
+      .invalidateCachedTools.mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('Redis MOVED'))
+      .mockResolvedValueOnce(undefined);
+    const res = createRes();
+
+    await updateMCPServerController(
+      { user, params: { serverName: 'github' }, body: { config: updatedConfig } },
+      res,
+    );
+
+    expect(require('~/server/services/Config').invalidateCachedTools).toHaveBeenCalledTimes(3);
+    expect(mockMcpManager.disconnectUserConnection).toHaveBeenCalledWith(user.id, 'github');
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('fences before deletion and fences cross-replica creations before disconnecting', async () => {
+    const user = await createUser();
+    mockRegistryInstance.getServerConfig.mockResolvedValue(
+      createDbConfig(new mongoose.Types.ObjectId()),
+    );
+    mockRegistryInstance.removeServer.mockResolvedValue(undefined);
+    const res = createRes();
+
+    await deleteMCPServerController(
+      { user, params: { serverName: 'github' } },
+      res,
+      mockMaybeUninstallOAuthMCP,
+    );
+
+    expect(mockRegistryInstance.getServerConfig).toHaveBeenCalledWith(
+      'github',
+      user.id,
+      undefined,
+      undefined,
+      { includeHidden: true },
+    );
+    const { invalidateCachedTools } = require('~/server/services/Config');
+    expect(invalidateCachedTools).toHaveBeenCalledWith({ userId: user.id, serverName: 'github' });
+    expect(invalidateCachedTools).toHaveBeenCalledTimes(2);
+    expect(mockMcpManager.disconnectUserConnection).toHaveBeenCalledWith(user.id, 'github');
+    expect(mockMaybeUninstallOAuthMCP).toHaveBeenCalledWith(
+      user.id,
+      'mcp_github',
+      {
+        mcpSettings: {
+          allowedDomains: ['https://oauth.example.com'],
+          allowedAddresses: null,
+        },
+      },
+      expect.objectContaining({ source: 'user' }),
+      { strictRevocation: undefined, retainFence: undefined },
+    );
+    expect(invalidateCachedTools.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRegistryInstance.removeServer.mock.invocationCallOrder[0],
+    );
+    expect(mockRegistryInstance.removeServer.mock.invocationCallOrder[0]).toBeLessThan(
+      invalidateCachedTools.mock.invocationCallOrder[1],
+    );
+    expect(invalidateCachedTools.mock.invocationCallOrder[1]).toBeLessThan(
+      mockMcpManager.disconnectUserConnection.mock.invocationCallOrder[0],
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('cleans credentials created by an authorized shared user during server deletion', async () => {
+    const owner = await createUser();
+    const sharedUser = await createUser();
+    const dbId = new mongoose.Types.ObjectId();
+    await grantPermission({
+      principalType: PrincipalType.USER,
+      principalId: sharedUser.id,
+      resourceType: ResourceType.MCPSERVER,
+      resourceId: dbId,
+      accessRoleId: AccessRoleIds.MCPSERVER_VIEWER,
+      grantedBy: owner.id,
+    });
+    mockRegistryInstance.getServerConfig.mockResolvedValue(createDbConfig(dbId));
+    mockRegistryInstance.removeServer.mockResolvedValue(undefined);
+    const tokenSnapshot = jest
+      .spyOn(mongoose.models.Token, 'distinct')
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([new mongoose.Types.ObjectId(sharedUser.id)]);
+
+    try {
+      await deleteMCPServerController(
+        { user: owner, params: { serverName: 'github' } },
+        createRes(),
+        mockMaybeUninstallOAuthMCP,
+      );
+
+      expect(tokenSnapshot).toHaveBeenCalledTimes(2);
+      expect(mockMaybeUninstallOAuthMCP).toHaveBeenCalledWith(
+        sharedUser.id,
+        'mcp_github',
+        expect.any(Object),
+        expect.objectContaining({ dbId: dbId.toString() }),
+        { strictRevocation: undefined, retainFence: undefined },
+      );
+      expect(require('~/server/services/Config').invalidateCachedTools).toHaveBeenCalledWith({
+        userId: sharedUser.id,
+        serverName: 'github',
+      });
+      expect(mockMcpManager.disconnectUserConnection).toHaveBeenCalledWith(sharedUser.id, 'github');
+    } finally {
+      tokenSnapshot.mockRestore();
+    }
+  });
+
+  it('fences a viewer who holds no OAuth token when the server is deleted', async () => {
+    const owner = await createUser();
+    const viewer = await createUser();
+    const dbId = new mongoose.Types.ObjectId();
+    await grantPermission({
+      principalType: PrincipalType.USER,
+      principalId: viewer.id,
+      resourceType: ResourceType.MCPSERVER,
+      resourceId: dbId,
+      accessRoleId: AccessRoleIds.MCPSERVER_VIEWER,
+      grantedBy: owner.id,
+    });
+    mockRegistryInstance.getServerConfig.mockResolvedValue(createDbConfig(dbId));
+    mockRegistryInstance.removeServer.mockResolvedValue(undefined);
+    const res = createRes();
+
+    await deleteMCPServerController(
+      { user: owner, params: { serverName: 'github' } },
+      res,
+      mockMaybeUninstallOAuthMCP,
+    );
+
+    expect(require('~/server/services/Config').invalidateCachedTools).toHaveBeenCalledWith({
+      userId: viewer.id,
+      serverName: 'github',
+    });
+    expect(mockMcpManager.disconnectUserConnection).toHaveBeenCalledWith(viewer.id, 'github');
+    expect(mockMaybeUninstallOAuthMCP).toHaveBeenCalledWith(
+      viewer.id,
+      'mcp_github',
+      expect.any(Object),
+      expect.objectContaining({ dbId: dbId.toString() }),
+      { strictRevocation: undefined, retainFence: undefined },
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('does not delete the registry entry when the distributed fence fails', async () => {
+    const user = await createUser();
+    require('~/server/services/Config').invalidateCachedTools.mockRejectedValue(
+      new Error('Redis unavailable'),
+    );
+    const res = createRes();
+
+    await deleteMCPServerController({ user, params: { serverName: 'github' } }, res);
+
+    expect(mockMcpManager.disconnectUserConnection).not.toHaveBeenCalled();
+    expect(mockRegistryInstance.removeServer).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+
+  it('restores the retained catalog when deletion persistence fails after fencing', async () => {
+    const user = await createUser();
+    const existingConfig = createDbConfig(new mongoose.Types.ObjectId());
+    const retainedTools = { retained: { function: { name: 'retained' } } };
+    mockRegistryInstance.getServerConfig.mockResolvedValue(existingConfig);
+    mockRegistryInstance.removeServer.mockRejectedValue(new Error('Deletion failed'));
+    require('~/server/services/Config').getMCPServerTools.mockResolvedValue(retainedTools);
+    const res = createRes();
+
+    await deleteMCPServerController({ user, params: { serverName: 'github' } }, res);
+
+    expect(require('~/server/services/Config').cacheMCPServerTools).toHaveBeenCalledWith({
+      userId: user.id,
+      serverName: 'github',
+      serverConfig: existingConfig,
+      serverTools: retainedTools,
+      publicationGeneration: 'restored-generation',
+    });
+    expect(mockMcpManager.disconnectUserConnection).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(500);
   });
 });

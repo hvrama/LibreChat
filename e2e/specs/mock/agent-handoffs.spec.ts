@@ -9,7 +9,7 @@ import {
   getAccessToken,
   messagesView,
   requestJson,
-  sendMessage,
+  sendMessageAndWaitForCompletion,
 } from './helpers';
 
 const DESCRIPTION = 'Created by the mock end-to-end suite to verify agent handoffs.';
@@ -19,6 +19,7 @@ const HANDOFF_PROMPT = 'Pass the specialist the exact request and relevant const
 const HANDOFF_PROMPT_KEY = 'context';
 const MCP_SERVER_TOOL_ID = 'sys__server__sys_mcp_e2e-memory';
 const MCP_TOOL_ID = 'remember_fact_mcp_e2e-memory';
+const MISSING_MCP_TOOL_ID = 'retired_fact_mcp_e2e-memory';
 const MCP_SERVER_NAME = 'e2e-memory';
 
 type HandoffRoute = {
@@ -31,6 +32,12 @@ type HandoffRoute = {
   receipt?: string;
   targetInstructions?: string;
   targetTools?: string[];
+  targetToolCall?: {
+    id: string;
+    name: string;
+    args: Record<string, unknown>;
+    outputIncludes: string;
+  };
 };
 
 type MCPToolsResponse = {
@@ -58,6 +65,41 @@ async function waitForMCPTool(page: Page, token: string): Promise<void> {
   ).toEqual(expect.arrayContaining([expect.objectContaining({ pluginKey: MCP_TOOL_ID })]));
 }
 
+async function openOrchestration(page: Page, form: Locator) {
+  const settings = form
+    .getByRole('listitem')
+    .filter({ hasText: 'Handoffs' })
+    .getByRole('button', { name: 'Configure', exact: true });
+  if (await settings.count()) {
+    await settings.click();
+  } else {
+    await form.getByRole('button', { name: 'Add tools' }).click();
+    await page
+      .getByRole('dialog', { name: 'Tool Library', exact: true })
+      .getByRole('listitem')
+      .filter({ hasText: 'Handoffs' })
+      .getByRole('button', { name: 'Configure', exact: true })
+      .click();
+  }
+  return page.getByTestId('item-dialog').getByRole('region', { name: 'Handoffs' });
+}
+
+async function closeOrchestration(page: Page) {
+  if (!(await page.getByTestId('item-dialog').count())) {
+    return;
+  }
+  await page.getByTestId('item-dialog').getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(page.getByTestId('item-dialog')).toBeHidden();
+  const marketplace = page.getByRole('dialog', {
+    name: 'Tool Library',
+    exact: true,
+    includeHidden: true,
+  });
+  if (await marketplace.count()) {
+    await marketplace.getByRole('button', { name: 'Close', exact: true }).click();
+  }
+}
+
 async function startNewAgent(page: Page): Promise<Locator> {
   let form = await openAgentBuilder(page);
   const createNewButton = form.getByRole('button', { name: 'Create New Agent' });
@@ -74,7 +116,7 @@ async function configureNewAgent(page: Page, name: string): Promise<Locator> {
   let form = await startNewAgent(page);
   await form.getByLabel('Agent name').fill(name);
   await form.getByLabel('Agent description').fill(DESCRIPTION);
-  await form.getByLabel('Instructions').fill(INSTRUCTIONS);
+  await form.getByRole('textbox', { name: 'Instructions', exact: true }).fill(INSTRUCTIONS);
   await selectMockModel(page, true);
   form = page.getByRole('form', { name: 'Agent configuration form' });
   return form;
@@ -82,6 +124,7 @@ async function configureNewAgent(page: Page, name: string): Promise<Locator> {
 
 async function createConfiguredAgent(form: Locator): Promise<AgentDetail> {
   const page = form.page();
+  await closeOrchestration(page);
   const [response] = await Promise.all([
     page.waitForResponse(
       (candidate) =>
@@ -124,6 +167,11 @@ async function selectAgentForChat(page: Page, agentName: string): Promise<void> 
   await page.getByRole('option', { name: agentName }).click();
   await expect(form.getByLabel('Agent name')).toHaveValue(agentName);
   await form.getByRole('button', { name: 'Select Agent' }).click();
+  /** On narrow viewports the builder drawer stays open over the composer. */
+  const closeSidebar = page.getByRole('button', { name: 'Close sidebar' });
+  if (await closeSidebar.isVisible()) {
+    await closeSidebar.click();
+  }
   await expect(page.getByRole('textbox', { name: 'Message input' })).toBeVisible();
 }
 
@@ -169,11 +217,12 @@ test.describe('agent handoffs', () => {
       bareSpecialistId = bareSpecialist.id;
 
       const routerForm = await configureNewAgent(page, routerName);
-      await routerForm.getByRole('button', { name: 'Advanced' }).click();
-      const handoffs = routerForm.getByRole('region', { name: 'Handoffs' });
+      const handoffs = await openOrchestration(page, routerForm);
       await expect(handoffs).toBeVisible();
 
       await handoffs.getByRole('combobox', { name: 'Add agent' }).click();
+      await page.locator('input[placeholder="Search agent"]:visible').fill(specialistName);
+      await expect(page.locator('input[placeholder="Search agent"]:visible')).toBeFocused();
       await page.getByRole('option', { name: specialistName }).click();
       await expect(handoffs.getByText('1 / 10', { exact: true })).toBeVisible();
       await handoffs.getByRole('button', { name: 'Expand' }).click();
@@ -215,8 +264,7 @@ test.describe('agent handoffs', () => {
       const reopenedForm = await openAgentBuilder(page);
       await reopenedForm.getByRole('combobox', { name: 'Agent', exact: true }).click();
       await page.getByRole('option', { name: routerName }).click();
-      await reopenedForm.getByRole('button', { name: 'Advanced' }).click();
-      const reopenedHandoffs = reopenedForm.getByRole('region', { name: 'Handoffs' });
+      const reopenedHandoffs = await openOrchestration(page, reopenedForm);
       await expect(reopenedHandoffs.getByText('2 / 10', { exact: true })).toBeVisible();
       const reopenedDestinations = reopenedHandoffs.getByRole('combobox', {
         name: 'Select agent',
@@ -233,11 +281,12 @@ test.describe('agent handoffs', () => {
         reopenedHandoffs.getByLabel("Content parameter name (default: 'instructions')"),
       ).toHaveValue(HANDOFF_PROMPT_KEY);
 
+      await closeOrchestration(page);
       await reopenedForm.getByRole('button', { name: 'Select Agent' }).click();
       await expect(page.getByRole('textbox', { name: 'Message input' })).toBeVisible();
 
       const label = `scratch-bare-${Date.now()}`;
-      const response = await sendMessage(
+      const response = await sendMessageAndWaitForCompletion(
         page,
         handoffMarker(label, [
           {
@@ -337,8 +386,7 @@ test.describe('agent handoffs', () => {
       createdIds.push(first.id, second.id, third.id);
 
       const routerForm = await configureNewAgent(page, routerName);
-      await routerForm.getByRole('button', { name: 'Advanced' }).click();
-      const handoffs = routerForm.getByRole('region', { name: 'Handoffs' });
+      const handoffs = await openOrchestration(page, routerForm);
       const addAgent = handoffs.getByRole('combobox', { name: 'Add agent' });
 
       await addAgent.click();
@@ -368,6 +416,8 @@ test.describe('agent handoffs', () => {
       const destinationDialog = page.getByRole('dialog', { name: 'Select agent' }).last();
       await expect(destinationDialog.getByRole('option', { name: firstName })).toBeVisible();
       await expect(destinationDialog.getByRole('option', { name: thirdName })).toBeVisible();
+      await destinationDialog.getByPlaceholder('Search agent').fill(firstName);
+      await expect(destinationDialog.getByPlaceholder('Search agent')).toBeFocused();
       await destinationDialog.getByRole('option', { name: firstName }).click();
 
       await addAgent.click();
@@ -401,9 +451,7 @@ test.describe('agent handoffs', () => {
       await editForm.getByRole('combobox', { name: 'Agent', exact: true }).click();
       await page.getByRole('option', { name: routerName }).click();
       await expect(editForm.getByLabel('Agent name')).toHaveValue(routerName);
-      await editForm.getByRole('button', { name: 'Advanced' }).click();
-
-      let editableHandoffs = editForm.getByRole('region', { name: 'Handoffs' });
+      let editableHandoffs = await openOrchestration(page, editForm);
       await expect(editableHandoffs.getByText('2 / 10', { exact: true })).toBeVisible();
       await editableHandoffs.getByRole('button', { name: 'Expand' }).first().click();
       await editableHandoffs
@@ -419,7 +467,7 @@ test.describe('agent handoffs', () => {
         .getByRole('option', { name: secondName })
         .click();
 
-      await editForm.getByRole('button', { name: 'Back to builder' }).click();
+      await closeOrchestration(page);
       const [updateResponse] = await Promise.all([
         page.waitForResponse(
           (response) =>
@@ -454,8 +502,7 @@ test.describe('agent handoffs', () => {
       editForm = await openAgentBuilder(page);
       await editForm.getByRole('combobox', { name: 'Agent', exact: true }).click();
       await page.getByRole('option', { name: routerName }).click();
-      await editForm.getByRole('button', { name: 'Advanced' }).click();
-      editableHandoffs = editForm.getByRole('region', { name: 'Handoffs' });
+      editableHandoffs = await openOrchestration(page, editForm);
       await expect(editableHandoffs.getByText('2 / 10', { exact: true })).toBeVisible();
       await expect(
         editableHandoffs.getByRole('combobox', { name: 'Select agent' }).first(),
@@ -468,7 +515,7 @@ test.describe('agent handoffs', () => {
         'The updated persisted handoff',
       );
 
-      await editForm.getByRole('button', { name: 'Back to builder' }).click();
+      await closeOrchestration(page);
       await editForm.getByRole('button', { name: 'Version', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Version History' })).toBeVisible();
       const history = page.getByRole('list', { name: 'Version History' });
@@ -497,8 +544,7 @@ test.describe('agent handoffs', () => {
 
       await page.getByRole('button', { name: 'Back to builder' }).click();
       editForm = page.getByRole('form', { name: 'Agent configuration form' });
-      await editForm.getByRole('button', { name: 'Advanced' }).click();
-      editableHandoffs = editForm.getByRole('region', { name: 'Handoffs' });
+      editableHandoffs = await openOrchestration(page, editForm);
       await expect(
         editableHandoffs.getByRole('combobox', { name: 'Select agent' }).first(),
       ).toContainText(firstName);
@@ -534,8 +580,7 @@ test.describe('agent handoffs', () => {
       }
 
       const routerForm = await configureNewAgent(page, uniqueAgentName('E2E Handoff Limit Router'));
-      await routerForm.getByRole('button', { name: 'Advanced' }).click();
-      const handoffs = routerForm.getByRole('region', { name: 'Handoffs' });
+      const handoffs = await openOrchestration(page, routerForm);
 
       for (const targetName of targetNames) {
         await handoffs.getByRole('combobox', { name: 'Add agent' }).click();
@@ -577,12 +622,10 @@ test.describe('agent handoffs', () => {
       let form = await openAgentBuilder(page);
       await form.getByRole('combobox', { name: 'Agent', exact: true }).click();
       await page.getByRole('option', { name: routerName }).click();
-      await form.getByRole('button', { name: 'Advanced' }).click();
-      await expect(
-        form.getByRole('region', { name: 'Handoffs' }).getByText('1 / 10', { exact: true }),
-      ).toBeVisible();
+      const configuredHandoffs = await openOrchestration(page, form);
+      await expect(configuredHandoffs.getByText('1 / 10', { exact: true })).toBeVisible();
 
-      await form.getByRole('button', { name: 'Back to builder' }).click();
+      await closeOrchestration(page);
       await form.getByRole('combobox', { name: 'Agent', exact: true }).click();
       await page.getByRole('option', { name: targetName }).click();
       await expect(form.getByLabel('Agent name')).toHaveValue(targetName);
@@ -603,8 +646,7 @@ test.describe('agent handoffs', () => {
 
       form = page.getByRole('form', { name: 'Agent configuration form' });
       await expect(form.getByLabel('Agent name')).toHaveValue(routerName, { timeout: 30000 });
-      await form.getByRole('button', { name: 'Advanced' }).click();
-      const handoffs = form.getByRole('region', { name: 'Handoffs' });
+      const handoffs = await openOrchestration(page, form);
       await expect(handoffs.getByText('0 / 10', { exact: true })).toBeVisible({
         timeout: 30000,
       });
@@ -707,7 +749,10 @@ test.describe('agent handoffs', () => {
 
       await selectAgentForChat(page, routerName);
       const noTransferLabel = `no-transfer-${Date.now()}`;
-      const noTransferResponse = await sendMessage(page, `E2E_REPLY:${noTransferLabel}`);
+      const noTransferResponse = await sendMessageAndWaitForCompletion(
+        page,
+        `E2E_REPLY:${noTransferLabel}`,
+      );
       expect(noTransferResponse.ok()).toBeTruthy();
       await expect(
         messagesView(page).getByText(`E2E reply ${noTransferLabel}`, { exact: true }),
@@ -716,7 +761,7 @@ test.describe('agent handoffs', () => {
         messagesView(page).getByRole('button', { name: /^Transferred to / }),
       ).toHaveCount(0);
 
-      const response = await sendMessage(
+      const response = await sendMessageAndWaitForCompletion(
         page,
         handoffMarker(label, [
           {
@@ -747,12 +792,11 @@ test.describe('agent handoffs', () => {
       });
       await expect(transferCard).toBeEnabled();
       await transferCard.click();
-      await expect(
-        messagesView(page).getByText('Handoff instructions:', { exact: true }),
-      ).toBeVisible();
-      await expect(
-        messagesView(page).getByText(JSON.stringify({ brief: payload }), { exact: true }),
-      ).toBeVisible();
+      const handoffDetails = messagesView(page).getByRole('region', {
+        name: 'Handoff instructions',
+      });
+      await expect(handoffDetails).toBeVisible();
+      await expect(handoffDetails.getByText(payload, { exact: true })).toBeVisible();
 
       await expect(page).toHaveURL(/\/c\/(?!new)/, { timeout: 15000 });
       const conversationUrl = page.url();
@@ -767,7 +811,7 @@ test.describe('agent handoffs', () => {
       await expect(transferCard).toBeVisible();
 
       const emptyLabel = `${label}-empty`;
-      const emptyResponse = await sendMessage(
+      const emptyResponse = await sendMessageAndWaitForCompletion(
         page,
         handoffMarker(emptyLabel, [
           {
@@ -799,7 +843,162 @@ test.describe('agent handoffs', () => {
     }
   });
 
-  test('executes a transitive router-to-specialist-to-reviewer handoff', async ({ page }) => {
+  test('invokes the target-scoped MCP tool after transfer and persists its output', async ({
+    page,
+  }) => {
+    test.setTimeout(180000);
+
+    await page.goto('/c/new', { timeout: 10000 });
+    const token = await getAccessToken(page);
+    const targetName = uniqueAgentName('E2E Tool Handoff Target');
+    const routerName = uniqueAgentName('E2E Tool Handoff Router');
+    const label = `target-tool-${Date.now()}`;
+    const fact = `delegated fact ${label}`;
+    const toolCallId = `call_e2e_handoff_target_tool_${label}`;
+    const toolOutput = `E2E MCP memory noted: ${fact}`;
+    let targetId: string | undefined;
+    let routerId: string | undefined;
+
+    try {
+      await waitForMCPTool(page, token);
+      const target = await createAgentViaApi(page, token, targetName, undefined, {
+        tools: [MCP_SERVER_TOOL_ID, MCP_TOOL_ID],
+      });
+      targetId = target.id;
+      const router = await createAgentViaApi(page, token, routerName, [
+        {
+          from: '',
+          to: target.id,
+          edgeType: 'handoff',
+          description: 'Delegate requests that require the target memory tool.',
+        },
+      ]);
+      routerId = router.id;
+
+      await selectAgentForChat(page, routerName);
+      const response = await sendMessageAndWaitForCompletion(
+        page,
+        handoffMarker(label, [
+          {
+            from: router.id,
+            to: target.id,
+            description: 'Delegate requests that require the target memory tool.',
+            args: {},
+            targetTools: [MCP_TOOL_ID],
+            targetToolCall: {
+              id: toolCallId,
+              name: MCP_TOOL_ID,
+              args: { fact },
+              outputIncludes: toolOutput,
+            },
+          },
+        ]),
+      );
+      expect(response.ok()).toBeTruthy();
+
+      const view = messagesView(page);
+      await expect(view.getByRole('button', { name: `Transferred to ${targetName}` })).toBeVisible({
+        timeout: 30000,
+      });
+      const toolCall = view.locator(`[data-testid="tool-call"][data-tool-call-id="${toolCallId}"]`);
+      await expect(toolCall).toBeVisible({ timeout: 30000 });
+      const toolToggle = toolCall.getByRole('button', { name: /remember_fact/ });
+      if ((await toolToggle.getAttribute('aria-expanded')) !== 'true') {
+        await toolToggle.click();
+      }
+      await expect(
+        view.locator(`[data-tool-call-output-id="${toolCallId}"]`).getByText(toolOutput, {
+          exact: true,
+        }),
+      ).toBeVisible({ timeout: 30000 });
+      const finalText = `E2E handoff tool complete ${label}: agent=${target.id}`;
+      await expect(view.getByText(finalText, { exact: true })).toBeVisible({ timeout: 30000 });
+
+      await expect(page).toHaveURL(/\/c\/(?!new)/, { timeout: 15000 });
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expect(
+        messagesView(page).locator(`[data-testid="tool-call"][data-tool-call-id="${toolCallId}"]`),
+      ).toBeVisible({ timeout: 30000 });
+      await expect(messagesView(page).getByText(finalText, { exact: true })).toBeVisible({
+        timeout: 30000,
+      });
+    } finally {
+      await cleanupAgent(page, routerId);
+      await cleanupAgent(page, targetId);
+    }
+  });
+
+  test('publishes a terminal error before model execution when the handoff target expects an unavailable MCP tool', async ({
+    page,
+  }) => {
+    test.setTimeout(180000);
+
+    await page.goto('/c/new', { timeout: 10000 });
+    const token = await getAccessToken(page);
+    const targetName = uniqueAgentName('E2E Unavailable Tool Target');
+    const routerName = uniqueAgentName('E2E Unavailable Tool Router');
+    const label = `unavailable-target-tool-${Date.now()}`;
+    let targetId: string | undefined;
+    let routerId: string | undefined;
+
+    try {
+      await waitForMCPTool(page, token);
+      const target = await createAgentViaApi(page, token, targetName, undefined, {
+        tools: [MISSING_MCP_TOOL_ID],
+      });
+      targetId = target.id;
+      const router = await createAgentViaApi(page, token, routerName, [
+        {
+          from: '',
+          to: target.id,
+          edgeType: 'handoff',
+          description: 'Delegate requests that require the unavailable target tool.',
+        },
+      ]);
+      routerId = router.id;
+
+      await selectAgentForChat(page, routerName);
+      const input = page.getByRole('textbox', { name: 'Message input' });
+      await input.fill(
+        handoffMarker(label, [
+          {
+            from: router.id,
+            to: target.id,
+            description: 'Delegate requests that require the unavailable target tool.',
+            args: {},
+          },
+        ]),
+      );
+      const [response] = await Promise.all([
+        page.waitForResponse((candidate) => {
+          const { pathname } = new URL(candidate.url());
+          return (
+            candidate.request().method() === 'POST' &&
+            (pathname === '/api/agents/chat' || pathname.startsWith('/api/agents/chat/')) &&
+            !pathname.endsWith('/abort')
+          );
+        }),
+        input.press('Enter'),
+      ]);
+
+      expect(response.status()).toBe(200);
+      await expect(
+        messagesView(page).getByText(
+          /is configured to use MCP tools, but none are available\. Verify that the MCP server is connected and this agent can access its selected tools, then try again\./,
+        ),
+      ).toBeVisible({ timeout: 30000 });
+      await expect(
+        messagesView(page).getByText(new RegExp(`E2E handoff (continuing|complete) ${label}`)),
+      ).toHaveCount(0);
+    } finally {
+      await cleanupAgent(page, routerId);
+      await cleanupAgent(page, targetId);
+    }
+  });
+
+  test('executes a transitive router-to-specialist-to-reviewer handoff @scenario:connected-agents-transitive', async ({
+    page,
+  }) => {
     test.setTimeout(180000);
 
     await page.goto('/c/new', { timeout: 10000 });
@@ -840,7 +1039,7 @@ test.describe('agent handoffs', () => {
       routerId = router.id;
 
       await selectAgentForChat(page, routerName);
-      const response = await sendMessage(
+      const response = await sendMessageAndWaitForCompletion(
         page,
         handoffMarker(label, [
           {
@@ -881,7 +1080,9 @@ test.describe('agent handoffs', () => {
     }
   });
 
-  test('executes simultaneous handoffs and renders both transfer branches', async ({ page }) => {
+  test('executes simultaneous handoffs and renders both transfer branches @scenario:connected-agents-simultaneous', async ({
+    page,
+  }) => {
     test.setTimeout(180000);
 
     await page.goto('/c/new', { timeout: 10000 });
@@ -921,7 +1122,7 @@ test.describe('agent handoffs', () => {
       routerId = router.id;
 
       await selectAgentForChat(page, routerName);
-      const response = await sendMessage(
+      const response = await sendMessageAndWaitForCompletion(
         page,
         handoffMarker(label, [
           {

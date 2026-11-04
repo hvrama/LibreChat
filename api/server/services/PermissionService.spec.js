@@ -6,6 +6,7 @@ const {
   AccessRoleIds,
   PrincipalType,
   PrincipalModel,
+  PermissionBits,
 } = require('librechat-data-provider');
 const {
   bulkUpdateResourcePermissions,
@@ -18,7 +19,8 @@ const {
   ensurePrincipalExists,
   ensureGroupPrincipalExists,
 } = require('./PermissionService');
-const { findRoleByIdentifier, getUserPrincipals, seedDefaultRoles } = require('~/models');
+const db = require('~/models');
+const { findRoleByIdentifier, getUserPrincipals, seedDefaultRoles } = db;
 
 // Mock the getTransactionSupport function for testing
 jest.mock('@librechat/data-schemas', () => ({
@@ -291,6 +293,46 @@ describe('PermissionService', () => {
       );
 
       expect(principalId).toBe(currentUser._id.toString());
+    });
+
+    test('accepts a directory user already linked to the supplied source id', async () => {
+      const directoryUser = await User.create({
+        name: 'ACL Principal Directory User',
+        email: 'acl-principal-directory-user@example.com',
+        provider: 'openid',
+        idOnTheSource: 'directory-user-id',
+      });
+
+      const principalId = await ensurePrincipalExists({
+        type: PrincipalType.USER,
+        name: directoryUser.name,
+        email: directoryUser.email,
+        source: 'entra',
+        idOnTheSource: directoryUser.idOnTheSource,
+      });
+
+      expect(principalId).toBe(directoryUser._id.toString());
+    });
+
+    test('uses an existing user found only by email without linking its identity', async () => {
+      const existingUser = await User.create({
+        name: 'ACL Principal Existing User',
+        email: 'acl-principal-existing-user@example.com',
+        provider: 'local',
+      });
+
+      const principalId = await ensurePrincipalExists({
+        type: PrincipalType.USER,
+        name: existingUser.name,
+        email: existingUser.email,
+        source: 'entra',
+        idOnTheSource: 'unlinked-directory-id',
+      });
+
+      const unchangedUser = await User.findById(existingUser._id).lean();
+      expect(principalId).toBe(existingUser._id.toString());
+      expect(unchangedUser.provider).toBe('local');
+      expect(unchangedUser.idOnTheSource).toBeUndefined();
     });
 
     test('rejects a local group id outside the current request context', async () => {
@@ -632,6 +674,24 @@ describe('PermissionService', () => {
       });
     });
 
+    test('should forward idOnTheSource so principal resolution can skip the user lookup', async () => {
+      getUserPrincipals.mockResolvedValue([
+        { principalType: PrincipalType.USER, principalId: userId },
+      ]);
+
+      await findAccessibleResources({
+        userId,
+        role: 'USER',
+        idOnTheSource: null,
+        resourceType: ResourceType.AGENT,
+        requiredPermissions: 1, // VIEW
+      });
+
+      expect(getUserPrincipals).toHaveBeenCalledWith(
+        expect.objectContaining({ idOnTheSource: null }),
+      );
+    });
+
     test('should find resources user can view', async () => {
       // Mock getUserPrincipals to return user principal
       getUserPrincipals.mockResolvedValue([
@@ -733,7 +793,9 @@ describe('PermissionService', () => {
         getAvailableRoles({
           resourceType: 'non_existent_type',
         }),
-      ).rejects.toThrow('Invalid resourceType: non_existent_type. Valid types: agent, promptGroup');
+      ).rejects.toThrow(
+        'Invalid resourceType: non_existent_type. Valid types: agent, codeEnvironment, promptGroup, mcpServer, remoteAgent, skill, sharedLink',
+      );
     });
   });
 
@@ -860,6 +922,189 @@ describe('PermissionService', () => {
       }).populate('roleId', 'accessRoleId');
       expect(groupEntry.roleId.accessRoleId).toBe(AccessRoleIds.AGENT_OWNER);
     });
+
+    test('adds, preserves, and removes agent Insights access independently of the role', async () => {
+      const grantResult = await bulkUpdateResourcePermissions({
+        resourceType: ResourceType.AGENT,
+        resourceId,
+        updatedPrincipals: [
+          {
+            type: PrincipalType.USER,
+            id: userId,
+            accessRoleId: AccessRoleIds.AGENT_VIEWER,
+            viewInsights: true,
+          },
+        ],
+        grantedBy: grantedById,
+      });
+
+      let entry = await AclEntry.findOne({
+        principalType: PrincipalType.USER,
+        principalId: userId,
+        resourceType: ResourceType.AGENT,
+        resourceId,
+      });
+      expect(entry.permBits & PermissionBits.VIEW_INSIGHTS).toBe(PermissionBits.VIEW_INSIGHTS);
+      expect(grantResult.insightsChanges).toEqual([
+        expect.objectContaining({ action: 'assigned' }),
+      ]);
+
+      const roleResult = await bulkUpdateResourcePermissions({
+        resourceType: ResourceType.AGENT,
+        resourceId,
+        updatedPrincipals: [
+          {
+            type: PrincipalType.USER,
+            id: userId,
+            accessRoleId: AccessRoleIds.AGENT_EDITOR,
+          },
+        ],
+        grantedBy: grantedById,
+      });
+      entry = await AclEntry.findOne({
+        principalType: PrincipalType.USER,
+        principalId: userId,
+        resourceType: ResourceType.AGENT,
+        resourceId,
+      });
+      expect(entry.permBits & PermissionBits.VIEW_INSIGHTS).toBe(PermissionBits.VIEW_INSIGHTS);
+      expect(roleResult.insightsChanges).toEqual([]);
+
+      const revokeResult = await bulkUpdateResourcePermissions({
+        resourceType: ResourceType.AGENT,
+        resourceId,
+        updatedPrincipals: [
+          {
+            type: PrincipalType.USER,
+            id: userId,
+            accessRoleId: AccessRoleIds.AGENT_EDITOR,
+            viewInsights: false,
+          },
+        ],
+        grantedBy: grantedById,
+      });
+      entry = await AclEntry.findOne({
+        principalType: PrincipalType.USER,
+        principalId: userId,
+        resourceType: ResourceType.AGENT,
+        resourceId,
+      });
+      expect(entry.permBits & PermissionBits.VIEW_INSIGHTS).toBe(0);
+      expect(revokeResult.insightsChanges).toEqual([
+        expect.objectContaining({ action: 'removed' }),
+      ]);
+    });
+
+    test.each([
+      {
+        updates: [true, false],
+        expectedInsights: 0,
+        expectedChanges: [],
+      },
+      {
+        updates: [false, true],
+        expectedInsights: PermissionBits.VIEW_INSIGHTS,
+        expectedChanges: [expect.objectContaining({ action: 'assigned' })],
+      },
+    ])(
+      'uses the last Insights value for duplicate principal updates',
+      async ({ updates, expectedInsights, expectedChanges }) => {
+        const results = await bulkUpdateResourcePermissions({
+          resourceType: ResourceType.AGENT,
+          resourceId,
+          updatedPrincipals: updates.map((viewInsights) => ({
+            type: PrincipalType.USER,
+            id: userId,
+            accessRoleId: AccessRoleIds.AGENT_VIEWER,
+            viewInsights,
+          })),
+          grantedBy: grantedById,
+        });
+
+        const entry = await AclEntry.findOne({
+          principalType: PrincipalType.USER,
+          principalId: userId,
+          resourceType: ResourceType.AGENT,
+          resourceId,
+        });
+        expect(entry.permBits & PermissionBits.VIEW_INSIGHTS).toBe(expectedInsights);
+        expect(results.granted).toHaveLength(1);
+        expect(results.insightsChanges).toEqual(expectedChanges);
+      },
+    );
+
+    test.each([
+      {
+        concurrentChange: 'grant',
+        initialInsights: false,
+        concurrentBitUpdate: { or: PermissionBits.VIEW_INSIGHTS },
+        expectedInsights: PermissionBits.VIEW_INSIGHTS,
+      },
+      {
+        concurrentChange: 'revocation',
+        initialInsights: true,
+        concurrentBitUpdate: { and: ~PermissionBits.VIEW_INSIGHTS },
+        expectedInsights: 0,
+      },
+    ])(
+      'atomically preserves a concurrent Insights $concurrentChange during a role-only update',
+      async ({ initialInsights, concurrentBitUpdate, expectedInsights }) => {
+        if (initialInsights) {
+          await AclEntry.updateOne(
+            {
+              principalType: PrincipalType.USER,
+              principalId: userId,
+              resourceType: ResourceType.AGENT,
+              resourceId,
+            },
+            { $bit: { permBits: { or: PermissionBits.VIEW_INSIGHTS } } },
+          );
+        }
+
+        const originalBulkWriteAclEntries = AclEntry.bulkWrite.bind(AclEntry);
+        const bulkWriteSpy = jest
+          .spyOn(AclEntry, 'bulkWrite')
+          .mockImplementationOnce(async (...args) => {
+            await AclEntry.updateOne(
+              {
+                principalType: PrincipalType.USER,
+                principalId: userId,
+                resourceType: ResourceType.AGENT,
+                resourceId,
+              },
+              { $bit: { permBits: concurrentBitUpdate } },
+            );
+            return originalBulkWriteAclEntries(...args);
+          });
+
+        try {
+          await bulkUpdateResourcePermissions({
+            resourceType: ResourceType.AGENT,
+            resourceId,
+            updatedPrincipals: [
+              {
+                type: PrincipalType.USER,
+                id: userId,
+                accessRoleId: AccessRoleIds.AGENT_EDITOR,
+              },
+            ],
+            grantedBy: grantedById,
+          });
+          expect(bulkWriteSpy).toHaveBeenCalled();
+        } finally {
+          bulkWriteSpy.mockRestore();
+        }
+
+        const entry = await AclEntry.findOne({
+          principalType: PrincipalType.USER,
+          principalId: userId,
+          resourceType: ResourceType.AGENT,
+          resourceId,
+        }).populate('roleId', 'accessRoleId');
+        expect(entry.roleId.accessRoleId).toBe(AccessRoleIds.AGENT_EDITOR);
+        expect(entry.permBits & PermissionBits.VIEW_INSIGHTS).toBe(expectedInsights);
+      },
+    );
 
     test('should revoke specified permissions', async () => {
       const revokedPrincipals = [

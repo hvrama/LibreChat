@@ -24,9 +24,9 @@ function EmptyState({
   const iconWrapBase = 'mb-3 flex h-12 w-12 items-center justify-center rounded-full border';
   const iconWrapTone =
     tone === 'danger'
-      ? 'border-red-200 bg-red-50 text-red-500 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400'
+      ? 'border-status-error-border bg-status-error-subtle text-text-destructive'
       : 'border-border-light bg-surface-secondary text-text-secondary';
-  const textTone = tone === 'danger' ? 'text-red-600 dark:text-red-400' : 'text-text-secondary';
+  const textTone = tone === 'danger' ? 'text-text-destructive' : 'text-text-secondary';
 
   return (
     <div className="flex flex-col items-center justify-center px-4 py-12 text-center">
@@ -44,12 +44,12 @@ function VersionListSkeleton() {
       {[0, 1, 2].map((i) => (
         <li key={i} className="relative flex items-stretch">
           <div className="relative flex w-6 shrink-0 justify-center">
-            {i < 2 && <div className="absolute -bottom-3 top-0 w-px bg-border-light" />}
-            <div className="relative z-10 mt-4 size-5 shrink-0 rounded-full border-2 border-border-light bg-surface-secondary" />
+            {i < 2 && <div className="bg-border-light absolute top-0 -bottom-3 w-px" />}
+            <div className="border-border-light bg-surface-secondary relative z-10 mt-4 size-5 shrink-0 rounded-full border-2" />
           </div>
-          <div className="mb-2 ml-2 flex flex-1 flex-col gap-2 rounded-xl border border-border-light bg-transparent p-3">
-            <div className="h-3 w-24 animate-pulse rounded bg-surface-secondary" />
-            <div className="h-3 w-40 animate-pulse rounded bg-surface-secondary" />
+          <div className="border-border-light ms-2 mb-2 flex flex-1 flex-col gap-2 rounded-xl border bg-transparent p-3">
+            <div className="bg-surface-secondary h-3 w-24 animate-pulse rounded" />
+            <div className="bg-surface-secondary h-3 w-40 animate-pulse rounded" />
           </div>
         </li>
       ))}

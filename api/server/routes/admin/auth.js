@@ -8,9 +8,13 @@ const {
   DEFAULT_SESSION_EXPIRY,
   SystemCapabilities,
   getTenantId,
+  tenantStorage,
 } = require('@librechat/data-schemas');
 const {
   isEnabled,
+  TENANT_CONTEXT_REQUIRED,
+  createPreAuthTenantGuard,
+  requirePreAuthTenantContext,
   getAdminPanelUrl,
   exchangeAdminCode,
   createSetBalanceConfig,
@@ -18,8 +22,10 @@ const {
   tenantContextMiddleware,
   preAuthTenantMiddleware,
   applyAdminRefresh,
+  applyGoogleAdminRefresh,
   AdminRefreshError,
   buildOpenIDRefreshParams,
+  isEmailDomainAllowed,
 } = require('@librechat/api');
 const { loginController } = require('~/server/controllers/auth/LoginController');
 const { hasCapability, requireCapability } = require('~/server/middleware/roles/capabilities');
@@ -101,9 +107,61 @@ function resolveRequestOrigin(req) {
   }
 }
 
+async function isEmailAllowedForUser(user) {
+  if (!user?.email) return false;
+  try {
+    const userId = user.id ?? user._id?.toString();
+    const appConfig = user.tenantId
+      ? await tenantStorage.run({ tenantId: user.tenantId }, () =>
+          getAppConfig({ role: user.role ?? '', userId, tenantId: user.tenantId }),
+        )
+      : await getAppConfig({ role: user.role ?? '', userId });
+    return isEmailDomainAllowed(user.email, appConfig?.registration?.allowedDomains);
+  } catch (err) {
+    logger.warn(`[admin/oauth/refresh] domain allowlist check failed, denying: ${err?.message}`);
+    return false;
+  }
+}
+
+function buildAdminRefreshClosures(sessionExpiry) {
+  return {
+    canAccessAdmin: async (user) => {
+      try {
+        return await hasCapability(
+          {
+            id: user.id ?? user._id?.toString(),
+            role: user.role ?? '',
+            tenantId: user.tenantId,
+          },
+          SystemCapabilities.ACCESS_ADMIN,
+        );
+      } catch (err) {
+        logger.warn(`[admin/oauth/refresh] capability check failed, denying: ${err?.message}`);
+        return false;
+      }
+    },
+    isEmailAllowed: isEmailAllowedForUser,
+    mintToken: async (user) => ({
+      token: await generateToken(user, sessionExpiry),
+      expiresAt: Date.now() + sessionExpiry,
+    }),
+  };
+}
+
+function buildGoogleAdminRefreshDeps(sessionExpiry) {
+  return {
+    findUsers,
+    getUserById,
+    ...buildAdminRefreshClosures(sessionExpiry),
+  };
+}
+
 router.post(
   '/login/local',
+  preAuthTenantMiddleware,
+  requirePreAuthTenantContext,
   middleware.logHeaders,
+  middleware.requireSameOrigin,
   middleware.loginLimiter,
   middleware.checkBan,
   middleware.validateEmailLogin,
@@ -178,24 +236,34 @@ function retrievePkceChallenge(provider) {
  * OpenID Admin Routes
  * ────────────────────────────────────────────── */
 
-router.get('/oauth/openid', requireOpenIdConfig, async (req, res, next) => {
-  const state = generateState();
-  const cache = getLogStores(CacheKeys.ADMIN_OAUTH_EXCHANGE);
-  const stored = await storeAndStripChallenge(cache, req, state, 'openid');
-  if (!stored) {
-    return res.redirect(
-      `${getAdminPanelUrl()}/auth/openid/callback?error=pkce_store_failed&error_description=Failed+to+store+PKCE+challenge`,
-    );
-  }
+router.get(
+  '/oauth/openid',
+  preAuthTenantMiddleware,
+  requirePreAuthTenantContext,
+  requireOpenIdConfig,
+  async (req, res, next) => {
+    const state = generateState();
+    const cache = getLogStores(CacheKeys.ADMIN_OAUTH_EXCHANGE);
+    const stored = await storeAndStripChallenge(cache, req, state, 'openid');
+    if (!stored) {
+      return res.redirect(
+        `${getAdminPanelUrl()}/auth/openid/callback?error=pkce_store_failed&error_description=Failed+to+store+PKCE+challenge`,
+      );
+    }
 
-  return passport.authenticate('openidAdmin', {
-    session: false,
-    state,
-  })(req, res, next);
-});
+    return passport.authenticate('openidAdmin', {
+      session: false,
+      state,
+    })(req, res, next);
+  },
+);
 
 router.get(
   '/oauth/openid/callback',
+  preAuthTenantMiddleware,
+  createPreAuthTenantGuard({
+    failureRedirect: `${getAdminPanelUrl()}/auth/openid/callback?error=${TENANT_CONTEXT_REQUIRED}&error_description=Tenant+context+required+in+strict+isolation+mode`,
+  }),
   (req, res, next) => {
     req.oauthState = typeof req.query.state === 'string' ? req.query.state : undefined;
     next();
@@ -218,24 +286,34 @@ router.get(
  * SAML Admin Routes
  * ────────────────────────────────────────────── */
 
-router.get('/oauth/saml', requireAdminStrategy('samlAdmin', 'SAML'), async (req, res, next) => {
-  const state = generateState();
-  const cache = getLogStores(CacheKeys.ADMIN_OAUTH_EXCHANGE);
-  const stored = await storeAndStripChallenge(cache, req, state, 'saml');
-  if (!stored) {
-    return res.redirect(
-      `${getAdminPanelUrl()}/auth/saml/callback?error=pkce_store_failed&error_description=Failed+to+store+PKCE+challenge`,
-    );
-  }
+router.get(
+  '/oauth/saml',
+  preAuthTenantMiddleware,
+  requirePreAuthTenantContext,
+  requireAdminStrategy('samlAdmin', 'SAML'),
+  async (req, res, next) => {
+    const state = generateState();
+    const cache = getLogStores(CacheKeys.ADMIN_OAUTH_EXCHANGE);
+    const stored = await storeAndStripChallenge(cache, req, state, 'saml');
+    if (!stored) {
+      return res.redirect(
+        `${getAdminPanelUrl()}/auth/saml/callback?error=pkce_store_failed&error_description=Failed+to+store+PKCE+challenge`,
+      );
+    }
 
-  return passport.authenticate('samlAdmin', {
-    session: false,
-    additionalParams: { RelayState: state },
-  })(req, res, next);
-});
+    return passport.authenticate('samlAdmin', {
+      session: false,
+      additionalParams: { RelayState: state },
+    })(req, res, next);
+  },
+);
 
 router.post(
   '/oauth/saml/callback',
+  preAuthTenantMiddleware,
+  createPreAuthTenantGuard({
+    failureRedirect: `${getAdminPanelUrl()}/auth/saml/callback?error=${TENANT_CONTEXT_REQUIRED}&error_description=Tenant+context+required+in+strict+isolation+mode`,
+  }),
   (req, res, next) => {
     req.oauthState = typeof req.body.RelayState === 'string' ? req.body.RelayState : undefined;
     next();
@@ -260,6 +338,8 @@ router.post(
 
 router.get(
   '/oauth/google',
+  preAuthTenantMiddleware,
+  requirePreAuthTenantContext,
   requireAdminStrategy('googleAdmin', 'Google'),
   async (req, res, next) => {
     const state = generateState();
@@ -275,12 +355,18 @@ router.get(
       scope: ['openid', 'profile', 'email'],
       session: false,
       state,
+      accessType: 'offline',
+      prompt: 'consent',
     })(req, res, next);
   },
 );
 
 router.get(
   '/oauth/google/callback',
+  preAuthTenantMiddleware,
+  createPreAuthTenantGuard({
+    failureRedirect: `${getAdminPanelUrl()}/auth/google/callback?error=${TENANT_CONTEXT_REQUIRED}&error_description=Tenant+context+required+in+strict+isolation+mode`,
+  }),
   (req, res, next) => {
     req.oauthState = typeof req.query.state === 'string' ? req.query.state : undefined;
     next();
@@ -305,6 +391,8 @@ router.get(
 
 router.get(
   '/oauth/github',
+  preAuthTenantMiddleware,
+  requirePreAuthTenantContext,
   requireAdminStrategy('githubAdmin', 'GitHub'),
   async (req, res, next) => {
     const state = generateState();
@@ -326,6 +414,10 @@ router.get(
 
 router.get(
   '/oauth/github/callback',
+  preAuthTenantMiddleware,
+  createPreAuthTenantGuard({
+    failureRedirect: `${getAdminPanelUrl()}/auth/github/callback?error=${TENANT_CONTEXT_REQUIRED}&error_description=Tenant+context+required+in+strict+isolation+mode`,
+  }),
   (req, res, next) => {
     req.oauthState = typeof req.query.state === 'string' ? req.query.state : undefined;
     next();
@@ -350,6 +442,8 @@ router.get(
 
 router.get(
   '/oauth/discord',
+  preAuthTenantMiddleware,
+  requirePreAuthTenantContext,
   requireAdminStrategy('discordAdmin', 'Discord'),
   async (req, res, next) => {
     const state = generateState();
@@ -371,6 +465,10 @@ router.get(
 
 router.get(
   '/oauth/discord/callback',
+  preAuthTenantMiddleware,
+  createPreAuthTenantGuard({
+    failureRedirect: `${getAdminPanelUrl()}/auth/discord/callback?error=${TENANT_CONTEXT_REQUIRED}&error_description=Tenant+context+required+in+strict+isolation+mode`,
+  }),
   (req, res, next) => {
     req.oauthState = typeof req.query.state === 'string' ? req.query.state : undefined;
     next();
@@ -395,6 +493,8 @@ router.get(
 
 router.get(
   '/oauth/facebook',
+  preAuthTenantMiddleware,
+  requirePreAuthTenantContext,
   requireAdminStrategy('facebookAdmin', 'Facebook'),
   async (req, res, next) => {
     const state = generateState();
@@ -416,6 +516,10 @@ router.get(
 
 router.get(
   '/oauth/facebook/callback',
+  preAuthTenantMiddleware,
+  createPreAuthTenantGuard({
+    failureRedirect: `${getAdminPanelUrl()}/auth/facebook/callback?error=${TENANT_CONTEXT_REQUIRED}&error_description=Tenant+context+required+in+strict+isolation+mode`,
+  }),
   (req, res, next) => {
     req.oauthState = typeof req.query.state === 'string' ? req.query.state : undefined;
     next();
@@ -438,24 +542,34 @@ router.get(
  * Apple Admin Routes (POST callback)
  * ────────────────────────────────────────────── */
 
-router.get('/oauth/apple', requireAdminStrategy('appleAdmin', 'Apple'), async (req, res, next) => {
-  const state = generateState();
-  const cache = getLogStores(CacheKeys.ADMIN_OAUTH_EXCHANGE);
-  const stored = await storeAndStripChallenge(cache, req, state, 'apple');
-  if (!stored) {
-    return res.redirect(
-      `${getAdminPanelUrl()}/auth/apple/callback?error=pkce_store_failed&error_description=Failed+to+store+PKCE+challenge`,
-    );
-  }
+router.get(
+  '/oauth/apple',
+  preAuthTenantMiddleware,
+  requirePreAuthTenantContext,
+  requireAdminStrategy('appleAdmin', 'Apple'),
+  async (req, res, next) => {
+    const state = generateState();
+    const cache = getLogStores(CacheKeys.ADMIN_OAUTH_EXCHANGE);
+    const stored = await storeAndStripChallenge(cache, req, state, 'apple');
+    if (!stored) {
+      return res.redirect(
+        `${getAdminPanelUrl()}/auth/apple/callback?error=pkce_store_failed&error_description=Failed+to+store+PKCE+challenge`,
+      );
+    }
 
-  return passport.authenticate('appleAdmin', {
-    session: false,
-    state,
-  })(req, res, next);
-});
+    return passport.authenticate('appleAdmin', {
+      session: false,
+      state,
+    })(req, res, next);
+  },
+);
 
 router.post(
   '/oauth/apple/callback',
+  preAuthTenantMiddleware,
+  createPreAuthTenantGuard({
+    failureRedirect: `${getAdminPanelUrl()}/auth/apple/callback?error=${TENANT_CONTEXT_REQUIRED}&error_description=Tenant+context+required+in+strict+isolation+mode`,
+  }),
   (req, res, next) => {
     req.oauthState = typeof req.body.state === 'string' ? req.body.state : undefined;
     next();
@@ -548,35 +662,76 @@ router.post('/oauth/exchange', middleware.loginLimiter, async (req, res) => {
  * `/api/admin/oauth/exchange`.
  *
  * POST /api/admin/oauth/refresh
- * Body:     { refresh_token: string, user_id?: string }
+ * Body:     { refresh_token: string, user_id?: string, provider?: 'openid' | 'google' }
  * Response: { token: string, refreshToken?: string, user: object, expiresAt: number }
  *
  * Errors (all responses are `{ error: string, error_code: string }`):
  *   400 MISSING_REFRESH_TOKEN  — refresh_token absent or empty
+ *   400 INVALID_PROVIDER       — provider value not one of 'openid' | 'google'
  *   401 REFRESH_FAILED         — IdP rejected the refresh grant
  *   401 USER_NOT_FOUND         — no LibreChat user matches the refreshed sub
- *   401 USER_ID_MISMATCH       — supplied user_id resolves to a user with a different openidId
+ *   401 USER_ID_MISMATCH       — supplied user_id resolves to a different provider id
  *   401 ISSUER_MISMATCH        — refreshed tokenset was issued by an unexpected issuer
  *   401 TENANT_MISMATCH        — resolved user belongs to a different tenant than the request
  *   403 FORBIDDEN              — resolved user no longer holds ACCESS_ADMIN
- *   403 TOKEN_REUSE_DISABLED   — OPENID_REUSE_TOKENS is not enabled on the server
- *   502 IDP_INCOMPLETE         — IdP returned a tokenset missing access_token
+ *   403 TOKEN_REUSE_DISABLED   — OPENID_REUSE_TOKENS is not enabled (openid provider only)
+ *   502 IDP_INCOMPLETE         — IdP returned a tokenset missing access_token / id_token
  *   502 CLAIMS_INCOMPLETE      — IdP tokenset has no readable claims or no sub
  *   503 OPENID_NOT_CONFIGURED  — OpenID is not configured on this server
+ *   503 GOOGLE_NOT_CONFIGURED  — Google admin OAuth is not configured on this server
  *   500 INTERNAL_ERROR         — anything else (logged server-side)
  */
 router.post(
   '/oauth/refresh',
   middleware.loginLimiter,
+  middleware.checkBan,
   preAuthTenantMiddleware,
   async (req, res) => {
     try {
-      const { refresh_token: refreshToken, user_id: userId } = req.body ?? {};
+      const {
+        refresh_token: refreshToken,
+        user_id: userId,
+        provider: rawProvider,
+      } = req.body ?? {};
       if (typeof refreshToken !== 'string' || refreshToken.length === 0) {
         return res.status(400).json({
           error: 'Missing refresh_token',
           error_code: 'MISSING_REFRESH_TOKEN',
         });
+      }
+
+      const provider =
+        typeof rawProvider === 'string' && rawProvider.length > 0 ? rawProvider : 'openid';
+      if (provider !== 'openid' && provider !== 'google') {
+        return res.status(400).json({
+          error: 'Unsupported provider',
+          error_code: 'INVALID_PROVIDER',
+        });
+      }
+
+      const sessionExpiry = Number(process.env.SESSION_EXPIRY) || DEFAULT_SESSION_EXPIRY;
+      const normalizedUserId = typeof userId === 'string' && userId.length > 0 ? userId : undefined;
+      const tenantId = getTenantId();
+
+      if (provider === 'google') {
+        try {
+          const result = await applyGoogleAdminRefresh(buildGoogleAdminRefreshDeps(sessionExpiry), {
+            refreshToken,
+            userId: normalizedUserId,
+            tenantId,
+            clientId: process.env.GOOGLE_CLIENT_ID,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+          });
+          req.user = { id: result.user._id };
+          await middleware.checkBan(req, res, () => {});
+          if (req.banned || res.headersSent) return;
+          return res.json(result);
+        } catch (err) {
+          if (err instanceof AdminRefreshError) {
+            return res.status(err.status).json({ error: err.message, error_code: err.code });
+          }
+          throw err;
+        }
       }
 
       if (!isEnabled(process.env.OPENID_REUSE_TOKENS)) {
@@ -621,7 +776,6 @@ router.post(
         });
       }
 
-      const sessionExpiry = Number(process.env.SESSION_EXPIRY) || DEFAULT_SESSION_EXPIRY;
       const expectedIssuer = openIdConfig.serverMetadata?.()?.issuer;
 
       try {
@@ -630,35 +784,18 @@ router.post(
           {
             findUsers,
             getUserById,
-            canAccessAdmin: async (user) => {
-              try {
-                return await hasCapability(
-                  {
-                    id: user.id ?? user._id?.toString(),
-                    role: user.role ?? '',
-                    tenantId: user.tenantId,
-                  },
-                  SystemCapabilities.ACCESS_ADMIN,
-                );
-              } catch (err) {
-                logger.warn(
-                  `[admin/oauth/refresh] capability check failed, denying: ${err?.message}`,
-                );
-                return false;
-              }
-            },
-            mintToken: async (user) => ({
-              token: await generateToken(user, sessionExpiry),
-              expiresAt: Date.now() + sessionExpiry,
-            }),
+            ...buildAdminRefreshClosures(sessionExpiry),
           },
           {
-            userId: typeof userId === 'string' && userId.length > 0 ? userId : undefined,
+            userId: normalizedUserId,
             previousRefreshToken: refreshToken,
             expectedIssuer,
-            tenantId: getTenantId(),
+            tenantId,
           },
         );
+        req.user = { id: result.user._id };
+        await middleware.checkBan(req, res, () => {});
+        if (req.banned || res.headersSent) return;
         return res.json(result);
       } catch (err) {
         if (err instanceof AdminRefreshError) {

@@ -4,8 +4,10 @@ import { Tools, MemoryScope, ArtifactModes, AgentCapabilities } from 'librechat-
 import type { TranslationKeys } from '~/hooks/useLocalize';
 import type { AgentForm, ExtendedFile } from '~/common';
 import type { BuiltinId } from '../../items/types';
+import OrchestrationHub from '../../../Advanced/OrchestrationHub';
 import { useVerifyAgentToolAuth } from '~/data-provider';
 import CodeBackground from '../../../Code/Background';
+import CodeSettings from '../../../Code/Settings';
 import SearchAction from '../../../Search/Action';
 import FileContext from '../../../FileContext';
 import FileSearch from '../../../FileSearch';
@@ -21,10 +23,14 @@ interface Props {
   description?: string;
 }
 
+const ARTIFACTS_CUSTOM_DOCS_URL =
+  'https://www.librechat.ai/docs/features/artifacts#custom-instructions';
+
 const ARTIFACT_MODES: Array<{
   value: string;
   labelKey: TranslationKeys;
   infoKey?: TranslationKeys;
+  docs?: { url: string; labelKey: TranslationKeys };
 }> = [
   {
     value: ArtifactModes.DEFAULT,
@@ -40,6 +46,7 @@ const ARTIFACT_MODES: Array<{
     value: ArtifactModes.CUSTOM,
     labelKey: 'com_ui_artifacts_mode_custom',
     infoKey: 'com_ui_artifacts_mode_custom_info',
+    docs: { url: ARTIFACTS_CUSTOM_DOCS_URL, labelKey: 'com_ui_artifacts_mode_custom_docs' },
   },
 ];
 
@@ -58,7 +65,7 @@ function ArtifactsConfig({ value, onChange }: ArtifactsConfigProps) {
 
   return (
     <div className="flex flex-col gap-3">
-      <span id="artifacts-mode-label" className="text-sm font-medium text-text-primary">
+      <span id="artifacts-mode-label" className="text-text-primary text-sm font-medium">
         {localize('com_ui_artifacts_mode')}
       </span>
       <Radio
@@ -69,7 +76,23 @@ function ArtifactsConfig({ value, onChange }: ArtifactsConfigProps) {
         aria-labelledby="artifacts-mode-label"
       />
       {active?.infoKey ? (
-        <p className="text-sm leading-relaxed text-text-secondary">{localize(active.infoKey)}</p>
+        <p className="text-text-secondary text-sm leading-relaxed">
+          {localize(active.infoKey)}
+          {active.docs ? (
+            <>
+              {' '}
+              <a
+                href={active.docs.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={localize(active.docs.labelKey)}
+                className="text-link hover:text-link-hover underline"
+              >
+                {localize('com_ui_learn_more')}
+              </a>
+            </>
+          ) : null}
+        </p>
       ) : null}
     </div>
   );
@@ -93,19 +116,19 @@ function MemoryConfig({ value, onChange }: MemoryConfigProps) {
           onCheckedChange={(checked) =>
             onChange(checked === true ? MemoryScope.agent : MemoryScope.user)
           }
-          className="relative float-left mr-2 inline-flex h-4 w-4 cursor-pointer"
+          className="relative float-start me-2 inline-flex cursor-pointer"
           value={isolated.toString()}
           aria-labelledby="memory-scope-label"
         />
         <label
           id="memory-scope-label"
           htmlFor="memory-scope-checkbox"
-          className="cursor-pointer text-sm font-medium text-text-primary"
+          className="text-text-primary cursor-pointer text-sm font-medium"
         >
           {localize('com_agents_memory_scope')}
         </label>
       </div>
-      <p className="text-sm leading-relaxed text-text-secondary">
+      <p className="text-text-secondary text-sm leading-relaxed">
         {localize('com_agents_memory_scope_info')}
       </p>
     </div>
@@ -114,7 +137,15 @@ function MemoryConfig({ value, onChange }: MemoryConfigProps) {
 
 function WebSearchConfig() {
   const { data } = useVerifyAgentToolAuth({ toolId: Tools.web_search }, { retry: 1 });
-  return <SearchAction authTypes={data?.authTypes} isToolAuthenticated={data?.authenticated} />;
+  return (
+    <SearchAction
+      authTypes={data?.authTypes}
+      isToolAuthenticated={data?.authenticated}
+      searchProvider={data?.searchProvider}
+      scraperProvider={data?.scraperProvider}
+      rerankerType={data?.rerankerType}
+    />
+  );
 }
 
 export default function BuiltinSection({
@@ -133,9 +164,12 @@ export default function BuiltinSection({
 
   let body: React.ReactNode = null;
 
-  if (builtinId === 'execute_code') {
+  if (builtinId === 'subagents' || builtinId === 'handoffs') {
+    body = <OrchestrationHub currentAgentId={agentId} tool={builtinId} />;
+  } else if (builtinId === 'execute_code') {
     body = (
       <div className="flex flex-col gap-4">
+        <CodeSettings />
         <CodeBackground />
         <CodeFiles agent_id={agentId} files={codeFiles} />
       </div>
@@ -162,12 +196,15 @@ export default function BuiltinSection({
     );
   }
 
-  const localizedDescription = description ? localize(description as TranslationKeys) : '';
+  const localizedDescription =
+    description && builtinId !== 'subagents' && builtinId !== 'handoffs'
+      ? localize(description as TranslationKeys)
+      : '';
 
   return (
     <div className="flex flex-col gap-5">
       {localizedDescription && (
-        <p className="text-sm leading-relaxed text-text-secondary">{localizedDescription}</p>
+        <p className="text-text-secondary text-sm leading-relaxed">{localizedDescription}</p>
       )}
       {body}
     </div>

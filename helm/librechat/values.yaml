@@ -16,6 +16,10 @@ global:
    # - JWT_REFRESH_SECRET
    # - MEILI_MASTER_KEY
   librechat:
+    # A named Secret is required to exist; a typo must not generate pod-local credentials.
+    # Set to "" only when all LibreChat credentials are supplied through configEnv (strings)
+    # or global.librechat.env (supports valueFrom.secretKeyRef).
+    # Bundled Meilisearch still requires its separate auth.existingMasterKeySecret.
     existingSecretName: "librechat-credentials-env"
     # Used for Setting the Right Key, can be something like AZURE_API_KEY, if Azure OpenAI is used
     existingSecretApiKey: OPENAI_API_KEY
@@ -39,12 +43,15 @@ librechat:
   # Example: https://admin.example.com/admin
   adminPanelUrl: ""
 
+  # Inject MONGO_URI / REDIS_PASSWORD built from the bundled subchart Secrets. Set a
+  # key to false when that database's settings come from global.librechat.existingSecretName.
+  injectBundledCredentials:
+    mongodb: true
+    redis: true
+
   configEnv:
-    # IMPORTANT -- GENERATE your own: openssl rand -hex 32 and openssl rand -hex 16 for CREDS_IV. Best Practise: Put into Secret. See global.librechat.existingSecretName
-    CREDS_KEY: 9e95d9894da7e68dd69c0046caf5343c8b1e80c89609b5a1e40e6568b5b23ce6
-    CREDS_IV: ac028c86ba23f4cd48165e0ca9f2c683
-    JWT_SECRET: 16f8c0ef4a5d391b26034086c628469d3f9f497f08163ab9b40137092f2909ef
-    JWT_REFRESH_SECRET: eaa5191f2914e30b9387fd84e254e4ba6fc51b4654968a9b0803b456a54b8418
+    # Set unique, persistent values in global.librechat.existingSecretName before production use.
+    # If omitted, LibreChat generates temporary values in .env.temp when the container filesystem is persistent.
     # Set Config Params here
     # ENV_NAME: env-value
 
@@ -123,7 +130,7 @@ librechat-rag-api:
 
 
 image:
-  repository: danny-avila/librechat
+  repository: librechat-ai/librechat
   registry: registry.librechat.ai
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
@@ -147,7 +154,7 @@ serviceAccount:
   name: ""
 
 lifecycle: {}
-# # base for adding a custom banner // see https://github.com/danny-avila/LibreChat/pull/3952 for an example
+# # base for adding a custom banner // see https://github.com/LibreChat-AI/LibreChat/pull/3952 for an example
 #   postStart:
 #     exec:
 #       command: ["/bin/sh", "-c", "npm run update-banner <displayFrom(Format: yyyy-mm-ddTHH:MM:SSZ)> <displayTo(Format: yyyy-mm-ddTHH:MM:SSZ)> <message> <isPublic(true/false)>"]
@@ -193,6 +200,8 @@ ingress:
       paths:
         - path: /
           pathType: ImplementationSpecific
+  # Set tls for any non-local install; without it the ingress serves plain HTTP
+  # and NOTES.txt prints a warning.
   tls: []
   #  - secretName: chart-example-tls
   #    hosts:
@@ -372,8 +381,11 @@ mongodb:
   # See https://github.com/bitnami/charts/issues/35164
   image:
     repository: bitnamilegacy/mongodb
+  # Credentials are generated into the subchart Secret and injected into
+  # MONGO_URI via secretKeyRef. Set librechat.configEnv.MONGO_URI to use your
+  # own database, or auth.enabled=false to restore the unauthenticated setup.
   auth:
-    enabled: false
+    enabled: true
   databases:
    - LibreChat
 #  persistence: 
@@ -388,12 +400,14 @@ meilisearch:
   image:
     tag: "v1.7.3"
   auth:
-    # Use an existing Kubernetes secret for the MEILI_MASTER_KEY
+    # Separate from global.librechat.existingSecretName, even when that reference is cleared.
+    # Must contain MEILI_MASTER_KEY matching the value supplied to LibreChat.
     existingMasterKeySecret: "librechat-credentials-env"
 
 # Redis Parameters
 redis:
   enabled: false
   architecture: standalone
+  # The generated password is injected as REDIS_PASSWORD via secretKeyRef.
   auth:
-    enabled: false
+    enabled: true

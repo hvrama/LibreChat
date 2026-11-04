@@ -6,11 +6,11 @@ import { SharePointIcon, DropdownPopup } from '@librechat/client';
 import { EModelEndpoint, EToolResources, AgentCapabilities } from 'librechat-data-provider';
 import type { ExtendedFile, AgentForm } from '~/common';
 import { useSharePointFileHandlingNoChatContext } from '~/hooks/Files/useSharePointFileHandling';
+import FileRow, { FileRowWrapper } from '~/components/Chat/Input/Files/FileRow';
 import { useFileHandlingNoChatContext } from '~/hooks/Files/useFileHandling';
 import { useAgentFileConfig, useLocalize, useLazyEffect } from '~/hooks';
 import DropzoneContent, { dropzoneClassName } from './UploadDropzone';
 import { SharePointPickerDialog } from '~/components/SharePoint';
-import FileRow from '~/components/Chat/Input/Files/FileRow';
 import { useGetStartupConfig } from '~/data-provider';
 import SectionHeader from './SectionHeader';
 import { isEphemeralAgent } from '~/common';
@@ -142,7 +142,7 @@ function FileSearch({
           setFiles={setFiles}
           agent_id={agent_id}
           tool_resource={EToolResources.file_search}
-          Wrapper={({ children }) => <div className="flex flex-wrap gap-2">{children}</div>}
+          Wrapper={FileRowWrapper}
         />
         <div>
           {sharePointEnabled ? (
@@ -169,7 +169,7 @@ function FileSearch({
           <input
             multiple={true}
             type="file"
-            style={{ display: 'none' }}
+            className="hidden"
             tabIndex={-1}
             ref={fileInputRef}
             disabled={disabledUploadButton}
@@ -178,7 +178,7 @@ function FileSearch({
         </div>
         {/* Disabled Message */}
         {agent_id ? null : (
-          <div className="text-xs text-text-secondary">
+          <div className="text-text-secondary text-xs">
             {localize('com_agents_file_search_disabled')}
           </div>
         )}

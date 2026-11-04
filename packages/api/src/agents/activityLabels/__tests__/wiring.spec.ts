@@ -123,6 +123,22 @@ describe('captureActivityBlockContext', () => {
     const context = captureActivityBlockContext(parts, 'agent-a');
     expect(context.thinkingExcerpts).toEqual(['Agent A reasoning']);
   });
+
+  it('keeps encoded provider reasoning out of the label evidence', () => {
+    const encoded = Buffer.from(Array.from({ length: 900 }, (_, i) => (i * 37 + 3) % 256)).toString(
+      'base64',
+    );
+    const parts: LooseContentPart[] = [
+      { type: 'think', think: 'Comparing both lockfiles before the upgrade.' },
+      { type: 'think', think: encoded },
+      { type: 'think', think: `Pinning the resolver.\n${encoded}` },
+    ];
+    const context = captureActivityBlockContext(parts);
+    expect(context.thinkingExcerpts).toEqual([
+      'Comparing both lockfiles before the upgrade.',
+      'Pinning the resolver.',
+    ]);
+  });
 });
 
 describe('stripActivityLabelParts', () => {
@@ -178,6 +194,23 @@ describe('synthesizeActivityLabelGapEvents', () => {
       { type: 'activity_label', activity_label: 'Same label', pending: false },
     ];
     expect(synthesizeActivityLabelGapEvents(parts, parts, meta)).toEqual([]);
+  });
+
+  it('re-emits a completed phase when its reconciled bounds changed', () => {
+    const snapshot: LooseContentPart[] = [
+      {
+        type: 'activity_label',
+        activity_label: 'Inspected and fixed the session',
+        activity_label_type: 'phase',
+        activity_start_index: 0,
+        activity_end_index: 1,
+        activity_count: 2,
+        pending: false,
+      },
+    ];
+    const fresh: LooseContentPart[] = [{ ...snapshot[0], activity_end_index: 2 }];
+
+    expect(synthesizeActivityLabelGapEvents(snapshot, fresh, meta)).toHaveLength(1);
   });
 });
 

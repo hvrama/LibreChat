@@ -188,8 +188,26 @@ export async function ensureLinkPermissions(
     return;
   }
 
+  /* A legacy row keeps its marker until every grant it needs exists, so it always goes
+   * back through the migration: the owner grant alone does not mean the public one was
+   * ever created. `autoMigrateLegacyLink` skips the grants that are already in place. */
   if ('isPublic' in rawDoc) {
     await autoMigrateLegacyLink(rawDoc as Parameters<typeof autoMigrateLegacyLink>[0]);
+    return;
+  }
+
+  /**
+   * The share badge reads the link on ordinary navigation, so the settled path has to
+   * stay read-only: re-granting on every open would turn a page load into an ACL write
+   * and reset `grantedAt`. Only a link that still has no owner grant needs one.
+   */
+  const alreadyGranted = await getAclService().checkPermission({
+    userId,
+    resourceType: ResourceType.SHARED_LINK,
+    resourceId: sharedLinkId.toString(),
+    requiredPermission: PermissionBits.DELETE,
+  });
+  if (alreadyGranted) {
     return;
   }
 
@@ -302,13 +320,18 @@ export async function deleteConvoSharedLinksWithCleanup(
 
 export async function deleteAllSharedLinksWithCleanup(
   user: string,
+  options: { awaitCleanup?: boolean } = {},
 ): Promise<{ message: string; deletedCount: number }> {
   const SharedLink = mongoose.models.SharedLink as Model<ISharedLink>;
   const links = await SharedLink.find({ user }).select('_id').lean();
   const ids = links.map((l) => l._id);
+  if (options.awaitCleanup && ids.length > 0) {
+    /** The links identify the ACL resources, so they must outlive a failed cleanup for a retry. */
+    await cleanupBulkSharedLinkPermissions(ids);
+  }
   const result = await SharedLink.deleteMany({ user });
 
-  if (ids.length > 0) {
+  if (!options.awaitCleanup && ids.length > 0) {
     cleanupBulkSharedLinkPermissions(ids).catch((err) => {
       logger.error('[deleteAllSharedLinksWithCleanup] ACL cleanup failed', {
         user,

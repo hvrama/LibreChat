@@ -265,6 +265,30 @@ describe('ensureLinkPermissions', () => {
     expect(entries).toHaveLength(1);
   });
 
+  test('does not write when the owner grant is already in place', async () => {
+    const link = await createTestLink();
+    await ensureLinkPermissions(link._id, userId);
+    const [granted] = await AclEntry.find({ resourceId: link._id }).lean();
+
+    await ensureLinkPermissions(link._id, userId);
+
+    const [after] = await AclEntry.find({ resourceId: link._id }).lean();
+    // Rendering the badge must not keep re-granting: `grantedAt` has to stand still.
+    expect(after.grantedAt?.toISOString()).toBe(granted.grantedAt?.toISOString());
+  });
+
+  test('still runs the legacy migration when the owner grant already exists', async () => {
+    const link = await createTestLink();
+    await ensureLinkPermissions(link._id, userId);
+    // A legacy row keeps its marker until every grant it needs exists.
+    await SharedLink.updateOne({ _id: link._id }, { $set: { isPublic: true } });
+
+    await ensureLinkPermissions(link._id, userId);
+
+    const migrated = await SharedLink.findById(link._id).lean();
+    expect((migrated as { isPublic?: boolean } | null)?.isPublic).toBeUndefined();
+  });
+
   test('does not delete the SharedLink on failure', async () => {
     const link = await createTestLink();
     const AccessRole = mongoose.models.AccessRole;
@@ -365,5 +389,22 @@ describe('deleteAllSharedLinksWithCleanup', () => {
       resourceId: { $in: [link1._id, link2._id] },
     }).lean();
     expect(aclAfter).toHaveLength(0);
+  });
+
+  test('awaits ACL cleanup and keeps the links when it fails', async () => {
+    const link = await createTestLink({ conversationId: 'c1' });
+    await grantCreationPermissions(link._id, userId, true);
+    const failure = jest.spyOn(AclEntry, 'deleteMany').mockRejectedValueOnce(new Error('acl down'));
+
+    await expect(deleteAllSharedLinksWithCleanup(userId, { awaitCleanup: true })).rejects.toThrow(
+      'acl down',
+    );
+    failure.mockRestore();
+
+    expect(await SharedLink.countDocuments({ _id: link._id })).toBe(1);
+
+    const result = await deleteAllSharedLinksWithCleanup(userId, { awaitCleanup: true });
+    expect(result.deletedCount).toBe(1);
+    expect(await AclEntry.countDocuments({ resourceId: link._id })).toBe(0);
   });
 });
