@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Spinner, ThemeSelector } from '@librechat/client';
 import { useSearchParams } from 'react-router-dom';
 import { useApproveUserMutation } from '~/data-provider';
@@ -12,14 +12,16 @@ function ApproveUser() {
   const [approvalStatus, setApprovalStatus] = useState<boolean>(false);
   const token = useMemo(() => params.get('token') || '', [params]);
   const email = useMemo(() => params.get('email') || '', [params]);
+  const action = useMemo(() => params.get('action') || 'approve', [params]);
+  const isDeny = action === 'deny';
 
   const approveUserMutation = useApproveUserMutation({
     onSuccess: () => {
-      setHeaderText(localize('com_auth_approve_success'));
+      setHeaderText(localize(isDeny ? 'com_auth_deny_success' : 'com_auth_approve_success'));
       setApprovalStatus(true);
     },
     onError: () => {
-      setHeaderText(localize('com_auth_approve_failed'));
+      setHeaderText(localize(isDeny ? 'com_auth_deny_failed' : 'com_auth_approve_failed'));
       setApprovalStatus(true);
     },
   });
@@ -30,12 +32,12 @@ function ApproveUser() {
     }
 
     if (token && email) {
-      approveUserMutation.mutate({ email, token });
+      approveUserMutation.mutate({ email, token, action });
     } else {
       setHeaderText(localize('com_auth_approve_invalid'));
       setApprovalStatus(true);
     }
-  }, [token, email, approvalStatus, approveUserMutation]);
+  }, [token, email, action, approvalStatus, approveUserMutation, localize]);
 
   const ApprovalResult = () => (
     <div className="flex flex-col items-center justify-center">
@@ -48,7 +50,7 @@ function ApproveUser() {
   const ApprovalInProgress = () => (
     <div className="flex flex-col items-center justify-center">
       <h1 className="mb-4 text-center text-3xl font-semibold text-black dark:text-white">
-        {localize('com_auth_approve_in_progress')}
+        {localize(isDeny ? 'com_auth_deny_in_progress' : 'com_auth_approve_in_progress')}
       </h1>
       <div className="mt-4 flex justify-center">
         <Spinner className="h-8 w-8 text-green-500" />

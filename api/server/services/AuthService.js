@@ -52,6 +52,7 @@ const AuthTokenTypes = Object.freeze({
 });
 
 const latestAuthTokenOptions = Object.freeze({ sort: { createdAt: -1 } });
+const APPROVAL_ACTIONS = Object.freeze({ APPROVE: 'approve', DENY: 'deny' });
 const genericVerificationMessage = 'Please check your email to verify your email address.';
 const invalidEmailVerificationMessage = 'Invalid or expired email verification token';
 const OPENID_SESSION_ID_TOKEN_EXPIRY_BUFFER_SECONDS = 30;
@@ -368,11 +369,59 @@ const sendApprovalEmail = async (user) => {
 };
 
 /**
+ * Send User Approval Confirmation Email to the configured approver, including a deny link
+ * @param {Partial<IUser>} user
+ * @param {string} authStrategy - e.g. 'EMAIL' or 'OPENID'
+ * @returns {Promise<void>}
+ */
+const sendApprovalConfirmationEmail = async (user, authStrategy) => {
+  const approverEmail = process.env.APPROVER_EMAIL;
+  if (!approverEmail || !checkEmailConfig()) {
+    return;
+  }
+
+  const [denyToken, hash] = createTokenHash();
+  const denyLink = `${domains.client}/approve?token=${denyToken}&email=${encodeURIComponent(
+    user.email,
+  )}&action=${APPROVAL_ACTIONS.DENY}`;
+
+  const userName = user.name || user.username || user.email;
+  await sendEmail({
+    email: approverEmail,
+    subject: `User approved - ${userName} (${user.email})`,
+    payload: {
+      appName: process.env.APP_TITLE || 'LibreChat',
+      userName,
+      userEmail: user.email,
+      authStrategy,
+      denyLink,
+      year: new Date().getFullYear(),
+    },
+    template: 'approvalAdminNotification.handlebars',
+    throwError: false,
+  });
+
+  await createToken({
+    userId: user._id,
+    email: user.email,
+    type: AuthTokenTypes.ADMIN_APPROVAL,
+    token: hash,
+    createdAt: Date.now(),
+    expiresIn: 604800,
+  });
+
+  logger.info(
+    `[sendApprovalConfirmationEmail] Approval confirmation email sent to approver [Email: ${approverEmail}] [User: ${user.email}] [Strategy: ${authStrategy}]`,
+  );
+};
+
+/**
  * Approve a user registration
  * @param {ServerRequest} req
  */
 const approveUser = async (req) => {
-  const { email, token } = req.body;
+  const { email, token, action } = req.body;
+  const isDeny = action === APPROVAL_ACTIONS.DENY;
   const decodedEmail = decodeURIComponent(email);
 
   const user = await findUser(
@@ -385,7 +434,12 @@ const approveUser = async (req) => {
     return new Error('User not found');
   }
 
-  if (user.adminApproved) {
+  if (isDeny && !user.adminApproved) {
+    logger.info(`[approveUser] User already denied [Email: ${decodedEmail}]`);
+    return { message: 'User has already been denied', status: 'success' };
+  }
+
+  if (!isDeny && user.adminApproved) {
     logger.info(`[approveUser] User already approved [Email: ${decodedEmail}]`);
     return { message: 'User has already been approved', status: 'success' };
   }
@@ -407,7 +461,7 @@ const approveUser = async (req) => {
     return new Error('Invalid or expired approval token');
   }
 
-  const updatedUser = await updateUser(approvalTokenData.userId, { adminApproved: true });
+  const updatedUser = await updateUser(approvalTokenData.userId, { adminApproved: !isDeny });
 
   if (!updatedUser) {
     logger.warn(`[approveUser] [User update failed] [Email: ${decodedEmail}]`);
@@ -415,6 +469,12 @@ const approveUser = async (req) => {
   }
 
   await deleteTokens({ token: approvalTokenData.token, type: AuthTokenTypes.ADMIN_APPROVAL });
+
+  if (isDeny) {
+    logger.info(`[approveUser] User denied successfully [Email: ${decodedEmail}]`);
+    return { message: 'User has been denied successfully', status: 'success' };
+  }
+
   logger.info(`[approveUser] User approved successfully [Email: ${decodedEmail}]`);
 
   if (user.emailVerified && checkEmailConfig()) {
@@ -433,24 +493,7 @@ const approveUser = async (req) => {
     logger.info(`[approveUser] Approval notification email sent [Email: ${decodedEmail}]`);
   }
 
-  const approverEmail = process.env.APPROVER_EMAIL;
-  if (approverEmail && checkEmailConfig()) {
-    await sendEmail({
-      email: approverEmail,
-      subject: `User approved - ${user.name || user.username || decodedEmail} (${decodedEmail})`,
-      payload: {
-        appName: process.env.APP_TITLE || 'LibreChat',
-        userName: user.name || user.username || decodedEmail,
-        userEmail: decodedEmail,
-        year: new Date().getFullYear(),
-      },
-      template: 'approvalAdminNotification.handlebars',
-      throwError: false,
-    });
-    logger.info(
-      `[approveUser] Approval confirmation email sent to approver [Email: ${approverEmail}]`,
-    );
-  }
+  await sendApprovalConfirmationEmail(user, 'EMAIL');
 
   return { message: 'User has been approved successfully', status: 'success' };
 };
@@ -1063,4 +1106,5 @@ module.exports = {
   setCloudFrontAuthCookies,
   requestPasswordReset,
   resendVerificationEmail,
+  sendApprovalConfirmationEmail,
 };

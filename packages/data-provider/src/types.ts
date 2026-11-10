@@ -661,6 +661,7 @@ export type ApproveUserResponse = { message: string };
 export type TApproveUser = {
   email: string;
   token: string;
+  action?: string;
 };
 
 export type TRefreshTokenResponse = {

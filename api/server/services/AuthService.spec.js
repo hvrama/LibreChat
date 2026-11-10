@@ -108,6 +108,8 @@ const {
   setAuthTokens,
   setCloudFrontAuthCookies,
   verifyEmail,
+  approveUser,
+  sendApprovalConfirmationEmail,
 } = require('./AuthService');
 
 /** Helper to build a mock Express response */
@@ -1391,5 +1393,112 @@ describe('registerUser - allowedDomains admin-panel override', () => {
     expect(result.message).toMatch(/cannot be used/i);
     // Domain check must happen before any DB user lookup.
     expect(findUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('approveUser deny action', () => {
+  const user = {
+    _id: 'user-approve',
+    email: 'user@example.com',
+    name: 'Approved User',
+    adminApproved: true,
+    emailVerified: true,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    delete process.env.APPROVER_EMAIL;
+  });
+
+  it('should set adminApproved to false with a valid token and the deny action', async () => {
+    const denyHash = bcrypt.hashSync('deny-token', 10);
+    findUser.mockResolvedValue(user);
+    findToken.mockResolvedValue({
+      userId: user._id,
+      email: user.email,
+      token: denyHash,
+      type: 'admin_approval',
+    });
+    updateUser.mockResolvedValue({ ...user, adminApproved: false });
+
+    const result = await approveUser({
+      body: { email: user.email, token: 'deny-token', action: 'deny' },
+    });
+
+    expect(result).toEqual({ message: 'User has been denied successfully', status: 'success' });
+    expect(updateUser).toHaveBeenCalledWith(user._id, { adminApproved: false });
+    expect(deleteTokens).toHaveBeenCalledWith({ token: denyHash, type: 'admin_approval' });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('should reject the deny action with an invalid token', async () => {
+    findUser.mockResolvedValue(user);
+    findToken.mockResolvedValue({
+      userId: user._id,
+      email: user.email,
+      token: bcrypt.hashSync('deny-token', 10),
+      type: 'admin_approval',
+    });
+
+    const result = await approveUser({
+      body: { email: user.email, token: 'wrong-token', action: 'deny' },
+    });
+
+    expect(result).toBeInstanceOf(Error);
+    expect(updateUser).not.toHaveBeenCalled();
+  });
+
+  it('should short-circuit the deny action when the user is already denied', async () => {
+    findUser.mockResolvedValue({ ...user, adminApproved: false });
+
+    const result = await approveUser({
+      body: { email: user.email, token: 'deny-token', action: 'deny' },
+    });
+
+    expect(result).toEqual({ message: 'User has already been denied', status: 'success' });
+    expect(findToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('sendApprovalConfirmationEmail', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.APPROVER_EMAIL = 'approver@example.com';
+    checkEmailConfig.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    delete process.env.APPROVER_EMAIL;
+  });
+
+  it('should email the approver with the auth strategy and a deny link, and issue a deny token', async () => {
+    const user = { _id: 'user-openid', email: 'user@example.com', name: 'OpenID User' };
+
+    await sendApprovalConfirmationEmail(user, 'OPENID');
+
+    expect(sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'approver@example.com',
+        template: 'approvalAdminNotification.handlebars',
+        payload: expect.objectContaining({
+          authStrategy: 'OPENID',
+          userEmail: user.email,
+          denyLink: expect.stringContaining('/approve?token='),
+        }),
+      }),
+    );
+    expect(sendEmail.mock.calls[0][0].payload.denyLink).toContain('&action=deny');
+    expect(createToken).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: user._id, email: user.email, type: 'admin_approval' }),
+    );
+  });
+
+  it('should do nothing when APPROVER_EMAIL is not set', async () => {
+    delete process.env.APPROVER_EMAIL;
+
+    await sendApprovalConfirmationEmail({ _id: 'x', email: 'x@example.com' }, 'EMAIL');
+
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(createToken).not.toHaveBeenCalled();
   });
 });

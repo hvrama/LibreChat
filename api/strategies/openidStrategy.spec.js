@@ -29,6 +29,9 @@ jest.mock('~/server/services/Files/strategies', () => ({
 jest.mock('~/server/services/Files/images/avatar', () => ({
   resizeAvatar: jest.fn().mockResolvedValue(Buffer.from('safe avatar')),
 }));
+jest.mock('~/server/services/AuthService', () => ({
+  sendApprovalConfirmationEmail: jest.fn(),
+}));
 jest.mock('~/server/services/Config', () => ({
   getAppConfig: jest.fn().mockResolvedValue({}),
 }));
@@ -577,6 +580,44 @@ describe('setupOpenId', () => {
     expect(result.details.message).toBe(ErrorTypes.AUTH_FAILED);
     expect(createUser).not.toHaveBeenCalled();
     expect(updateUser).not.toHaveBeenCalled();
+  });
+
+  it('should create new users as admin approved and notify the approver', async () => {
+    const { sendApprovalConfirmationEmail } = require('~/server/services/AuthService');
+
+    await validate(tokenset);
+
+    expect(createUser).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'openid', adminApproved: true }),
+      expect.anything(),
+      true,
+      true,
+    );
+    expect(sendApprovalConfirmationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: 'newUserId', adminApproved: true }),
+      'OPENID',
+    );
+  });
+
+  it('should block login when APPROVER_EMAIL is set and the user is not admin approved', async () => {
+    process.env.APPROVER_EMAIL = 'approver@example.com';
+    const existingUser = {
+      _id: 'existingUserId',
+      provider: 'openid',
+      openidId: tokenset.claims().sub,
+      email: tokenset.claims().email,
+      username: 'existinguser',
+      name: 'Existing User',
+      adminApproved: false,
+    };
+    findUser.mockResolvedValue(existingUser);
+
+    const result = await validate(tokenset);
+
+    expect(result.user).toBe(false);
+    expect(result.details.message).toBe('pending_approval');
+    expect(updateUser).not.toHaveBeenCalled();
+    delete process.env.APPROVER_EMAIL;
   });
 
   it('should block login when email fallback finds user with mismatched openidId', async () => {

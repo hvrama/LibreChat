@@ -27,6 +27,7 @@ const {
 const { getStrategyFunctions } = require('~/server/services/Files/strategies');
 const { resizeAvatar } = require('~/server/services/Files/images/avatar');
 const { findUser, createUser, updateUser, findRolesByNames } = require('~/models');
+const { sendApprovalConfirmationEmail } = require('~/server/services/AuthService');
 const { getAppConfig } = require('~/server/services/Config');
 const getLogStores = require('~/cache/getLogStores');
 
@@ -693,10 +694,12 @@ async function processOpenIDAuth(tokenset, existingUsersOnly = false) {
       name: fullName,
       idOnTheSource: userinfo.oid,
       openidIssuer,
+      adminApproved: true,
     };
 
     const balanceConfig = getBalanceConfig(appConfig);
     user = await createUser(user, balanceConfig, true, true);
+    await sendApprovalConfirmationEmail(user, 'OPENID');
   } else {
     user.provider = 'openid';
     user.openidId = userinfo.sub;
@@ -710,6 +713,11 @@ async function processOpenIDAuth(tokenset, existingUsersOnly = false) {
       user.email = email;
       user.emailVerified = userinfo.email_verified || false;
     }
+  }
+
+  if (process.env.APPROVER_EMAIL && !user.adminApproved) {
+    logger.error(`[openidStrategy] [Login failed] Account not approved [Email: ${user.email}]`);
+    throw new Error('pending_approval');
   }
 
   const adminRole = process.env.OPENID_ADMIN_ROLE;
@@ -861,6 +869,9 @@ function createOpenIDCallback(existingUsersOnly) {
         return done(null, false, { message: err.message });
       }
       if (err.message && err.message.includes('role to log in')) {
+        return done(null, false, { message: err.message });
+      }
+      if (err.message === 'pending_approval') {
         return done(null, false, { message: err.message });
       }
       logger.error('[openidStrategy] login failed', err);
