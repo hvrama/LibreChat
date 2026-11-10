@@ -35,6 +35,7 @@ const {
   generateToken,
   deleteUserById,
   generateRefreshToken,
+  deleteAllUserSessions,
 } = require('~/models');
 const { registerSchema } = require('~/strategies/validators');
 const { getAppConfig } = require('~/server/services/Config');
@@ -471,7 +472,8 @@ const approveUser = async (req) => {
   await deleteTokens({ token: approvalTokenData.token, type: AuthTokenTypes.ADMIN_APPROVAL });
 
   if (isDeny) {
-    logger.info(`[approveUser] User denied successfully [Email: ${decodedEmail}]`);
+    await deleteAllUserSessions({ userId: approvalTokenData.userId });
+    logger.info(`[approveUser] User denied and sessions revoked [Email: ${decodedEmail}]`);
     return { message: 'User has been denied successfully', status: 'success' };
   }
 

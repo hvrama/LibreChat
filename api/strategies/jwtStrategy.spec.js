@@ -53,6 +53,21 @@ describe('jwtStrategy', () => {
     expect(user.idOnTheSource).toBeNull();
   });
 
+  it('rejects an unapproved user when APPROVER_EMAIL is configured', async () => {
+    process.env.APPROVER_EMAIL = 'approver@example.com';
+    getUserById.mockResolvedValue({
+      _id: { toString: () => 'user-denied' },
+      role: SystemRoles.USER,
+      adminApproved: false,
+    });
+
+    const { user, info } = await invokeVerify({ id: 'user-denied' });
+
+    expect(user).toBe(false);
+    expect(info).toEqual({ message: 'pending_approval' });
+    delete process.env.APPROVER_EMAIL;
+  });
+
   it('preserves a stored idOnTheSource for federated users', async () => {
     getUserById.mockResolvedValue({
       _id: { toString: () => 'user-2' },

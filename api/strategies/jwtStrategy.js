@@ -13,6 +13,10 @@ const jwtLogin = () =>
     async (payload, done) => {
       try {
         const user = await getUserById(payload?.id, '-password -__v -totpSecret -backupCodes');
+        if (user && process.env.APPROVER_EMAIL && !user.adminApproved) {
+          logger.warn('[jwtLogin] JwtStrategy => account not approved: ' + payload?.id);
+          return done(null, false, { message: 'pending_approval' });
+        }
         if (user) {
           user.id = user._id.toString();
           /** Absent on the full doc means local user; null skips getUserPrincipals' fallback lookup */

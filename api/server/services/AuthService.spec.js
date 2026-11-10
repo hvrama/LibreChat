@@ -54,6 +54,7 @@ jest.mock('~/models', () => ({
   generateToken: jest.fn(),
   deleteUserById: jest.fn(),
   generateRefreshToken: jest.fn(),
+  deleteAllUserSessions: jest.fn(),
 }));
 jest.mock('~/strategies/validators', () => ({
   registerSchema: {
@@ -95,6 +96,7 @@ const {
   createSession,
   createToken,
   deleteTokens,
+  deleteAllUserSessions,
 } = require('~/models');
 const { getAppConfig } = require('~/server/services/Config');
 const { sendEmail } = require('~/server/utils');
@@ -1428,6 +1430,7 @@ describe('approveUser deny action', () => {
     expect(result).toEqual({ message: 'User has been denied successfully', status: 'success' });
     expect(updateUser).toHaveBeenCalledWith(user._id, { adminApproved: false });
     expect(deleteTokens).toHaveBeenCalledWith({ token: denyHash, type: 'admin_approval' });
+    expect(deleteAllUserSessions).toHaveBeenCalledWith({ userId: user._id });
     expect(sendEmail).not.toHaveBeenCalled();
   });
 
