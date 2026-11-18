@@ -6292,7 +6292,8 @@ class AgentClient extends BaseClient {
         contentParts: immediate ? [] : this.contentParts,
         titleMethod: titleConfig.titleMethod,
         titlePrompt: titleConfig.titlePrompt,
-        titlePromptTemplate: titleConfig.titlePromptTemplate,
+        titlePromptTemplate:
+          titleConfig.titlePromptTemplate ?? (immediate ? 'User: {input}' : undefined),
         chainOptions: {
           runName: 'TitleRun',
           signal: abortController.signal,
